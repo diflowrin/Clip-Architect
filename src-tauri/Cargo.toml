@@ -1,0 +1,51 @@
+[package]
+name = "clip-architect"
+version = "0.1.0"
+description = "Desktop shell for the ClipArchitect short-video generator."
+authors = ["ClipArchitect"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+# The OS random source, for the per-launch backend API key. Already in the tree
+# as a transitive dependency of tauri, so naming it here costs no extra build.
+getrandom = "0.3"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+# opener only. The shell and dialog plugins were pulled in and never called;
+# see the comment in lib.rs::run.
+tauri-plugin-opener = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Job Objects are the only reliable way to guarantee the Python backend dies
+# with the app. Killing the child in an exit handler covers a clean shutdown,
+# but not a crash or an end-task from Task Manager - and an orphaned backend
+# keeps rendering and holding its port indefinitely.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    # CreateJobObjectW takes SECURITY_ATTRIBUTES, so it is gated behind
+    # Win32_Security even though this code passes None for it.
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+# The bundle is dominated by the Python sidecar, but these keep the Rust shell
+# itself small and strip the panic-unwinding machinery it never uses.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

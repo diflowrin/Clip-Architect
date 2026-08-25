@@ -1,0 +1,1500 @@
+/* Design tokens. Light values live on :root so a viewer with no explicit
+   preference still gets a complete palette; the dark block only overrides. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #dfe3e8;
+  --border-strong: #c6ccd4;
+  --text: #14181d;
+  --text-muted: #5c6672;
+  /* Carries every field hint in the app - the prompt precedence rule, the
+     narration length rule, every API key instruction. At the old #8b95a1 that
+     was 3.0:1 on white, below the 4.5:1 AA floor, so the best-written text in
+     the product was the least readable. 5.0:1 on --surface, 4.7:1 on --bg. */
+  --text-faint: #67707c;
+  /* Burnt orange, between orange and brown. Chosen for white button text and
+     for the focus ring, which have different floors: 5.5:1 against white,
+     5.1:1 against --bg. The neutrals around it stay cool on purpose - a warm
+     accent on a cool ground reads as a decision, where a warm accent on a warm
+     cream ground is the look every tool in this category already ships. */
+  --accent: #a94f22;
+  --accent-hover: #8f4620;
+  --accent-contrast: #ffffff;
+  --danger: #cf3b3b;
+  --danger-bg: #fdeaea;
+  --success: #1f8a4c;
+  --success-bg: #e8f6ed;
+  --warning: #9a6800;
+  --warning-bg: #fdf3dc;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --shadow: 0 1px 2px rgba(16, 20, 26, 0.06), 0 4px 12px rgba(16, 20, 26, 0.05);
+
+  --sidebar-width: 232px;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171c;
+    --surface: #1b1f26;
+    --surface-raised: #222731;
+    --border: #2c323c;
+    --border-strong: #3d4553;
+    --text: #e7eaee;
+    --text-muted: #9aa4b2;
+    /* 3.6:1 before, on the same reasoning as the light value. 5.5:1 on
+       --surface, 4.9:1 on --surface-raised, the tightest pairing here. */
+    --text-faint: #8b95a3;
+    /* The same hue lifted for a dark ground, carrying near-black text: 8.1:1
+       on the button, 7.0:1 as a ring against --surface. */
+    --accent: #e8965a;
+    --accent-hover: #f0a468;
+    --accent-contrast: #0d1017;
+    --danger: #ff7b7b;
+    --danger-bg: #3a2226;
+    --success: #5ed48f;
+    --success-bg: #16301f;
+    --warning: #f0c66b;
+    --warning-bg: #332a17;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 14px rgba(0, 0, 0, 0.25);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  /* The window chrome already scrolls; a second scrollbar on body looks broken. */
+  overflow: hidden;
+}
+
+/* ---------- app shell ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  height: 100%;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 12px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.sidebar__brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 10px 16px;
+}
+
+.sidebar__brand-name {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.sidebar__brand-version {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.nav-item[aria-current='page'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.nav-item__icon {
+  flex: none;
+  width: 16px;
+  text-align: center;
+}
+
+.sidebar__footer {
+  margin-top: auto;
+  padding: 12px 10px 0;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
+  word-break: break-all;
+}
+
+/* A flex column so a workspace child can claim the real remaining height.
+   Scrolling moves into the views themselves: the reading ones scroll their own
+   content, and the workspace does not scroll at all - its two columns do. */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 28px 32px 48px;
+}
+
+/* No width cap here: the Generate screen is a workspace and wants the whole
+   window. The cap moves onto the views that are read rather than worked in. */
+.main__inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.view:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The reading views own their scrollbar now that .main no longer has one. */
+.view--reading {
+  width: 100%;
+  max-width: 940px;
+  margin: 0 auto;
+  overflow-y: auto;
+}
+
+/* ---------- form page ---------- */
+
+/* The full window. The 720px reading column was sized for a form of four
+   fields; the form now carries the whole job - script, footage, voice,
+   subtitles - and a single column of that height is a page you scroll rather
+   than a page you see. Width is what turns the grids below into rows.
+   Prose keeps its own measure: the hints stay capped at 62ch, so a wide
+   window widens the controls and never the sentences. */
+.form-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.form-page__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.form-page__head .page-title,
+.form-page__head .page-subtitle {
+  margin: 0;
+}
+
+.form-page__commit {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* Chips: a small closed set shown all at once, instead of a dropdown that
+   hides its options behind a click and tells you nothing about how many. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--text-faint);
+  color: var(--text);
+}
+
+/* Selection reads as a filled state rather than a coloured border: the border
+   version is invisible at a glance in a row of six. */
+.chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+/* The styles beside the frame they produce, at a size where an outline that
+   fails over busy footage is visible before it costs a render.
+
+   The pair is centred and capped rather than stretched across the window. Full
+   width pushed the frame into the far corner with a screen of empty surface
+   between it and the chips that change it - two halves of one decision, too
+   far apart to compare. Centring vertically as well keeps the chips level with
+   the frame instead of stranded at the top of a portrait preview. */
+.style-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(160px, 14vw, 224px);
+  gap: 28px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+/* The cap and the centring live on the field, not on the picker inside it, so
+   the label travels with what it names. Centring the picker alone left "Style"
+   against the far left edge of a full-width section, a screen away from the
+   chips it labels. */
+.field--centred {
+  width: 100%;
+  max-width: 760px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Label, chips and hint as one stack, so the three move together when the
+   column is centred against the frame beside it. */
+.style-picker__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.style-picker__frame {
+  min-width: 0;
+}
+
+/* Available, not asked. Closed by default and quiet when closed, so the
+   settings behind it never read as something left undone. */
+.advanced {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.advanced__summary {
+  padding: 14px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.advanced__summary:hover {
+  color: var(--text);
+}
+
+.advanced[open] .advanced__summary {
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+/* The sections inside lose their own frame: one container level, not two. */
+.advanced .section {
+  border: none;
+  border-radius: 0;
+  margin-bottom: 0;
+}
+
+.advanced .section + .section {
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- subtitle preview ---------- */
+
+/* A container so the type inside can be sized in cqw: the subtitle is a
+   percentage of the video's width, and that is the only way it reads the same
+   here as it will in the file. */
+.subtitle-preview {
+  container-type: inline-size;
+  position: relative;
+  width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #000;
+}
+
+/* Stand-in footage. Not a photograph and not pretending to be one - a subtitle
+   has to survive a busy frame, and a flat black ground would flatter an
+   outline that fails over real video. */
+.subtitle-preview__scene {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 30% 20%, rgba(255, 255, 255, 0.22), transparent 60%),
+    linear-gradient(160deg, #3d4a5c 0%, #6b5344 55%, #2a2018 100%);
+}
+
+.subtitle-preview__stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6% 7% 9%;
+}
+
+/* paint-order puts the stroke behind the fill, the way a burned-in subtitle is
+   drawn. Without it the outline eats into the letterforms from both sides and
+   a heavy weight reads thinner here than it will in the video. */
+/* No font-weight here: the component sets it, because a real bundled face
+   already carries its weight and must not be synthetically bolded on top. */
+.subtitle-preview__text {
+  paint-order: stroke fill;
+  line-height: 1.15;
+  text-align: center;
+  text-wrap: balance;
+}
+
+/* ---------- result screen ---------- */
+
+/* What the app opens on. One video, one decision, centred - the whole screen
+   is the thing you made, and the settings do not exist until asked for. */
+.result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  height: 100%;
+  min-height: 0;
+  padding: 8px 0;
+}
+
+.result__head {
+  text-align: center;
+}
+
+.result__head .page-title,
+.result__head .page-subtitle {
+  margin: 0;
+}
+
+/* Constrained on both axes, so a 9:16 and a 16:9 both fit the same screen
+   without the layout knowing which it got. */
+.result__video {
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+.result__gone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(100%, 420px);
+  aspect-ratio: 9 / 16;
+  max-height: 100%;
+  padding: 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.result__actions {
+  justify-content: center;
+}
+
+.result__hint {
+  text-align: center;
+}
+
+/* ---------- generate workspace ---------- */
+
+/* Two columns: the thing being made, and the controls that shape it. The
+   inspector is a fixed width because its contents are labels and inputs, which
+   do not benefit from more; everything left over goes to the work. */
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 20px;
+  height: 100%;
+  /* Stretch, not start: the stage has to receive the full column height or the
+     frame inside it has nothing to grow into and collapses to its label. */
+  align-items: stretch;
+  min-height: 0;
+}
+
+/* The stage holds the preview above the clip strip. Both flex against the
+   available height, which is what lets one layout serve 9:16, 1:1 and 16:9:
+   changing the aspect changes how much height the frame claims, and nothing
+   moves between columns. */
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* The frame is centred and constrained on both axes, so a tall 9:16 and a wide
+   16:9 both sit inside it without the surrounding layout knowing which it got.
+   The gutters beside a vertical frame are letterbox, not waste - the same
+   reasoning as the black behind every video in this app. */
+.stage__frame {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.stage__strip {
+  min-height: 0;
+}
+
+/* Both axes capped, so the frame fits the stage whichever way round it is. */
+.frame {
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+.frame__label {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #8b95a3;
+}
+
+/* The inspector scrolls on its own, so a long settings column never pushes the
+   stage off screen. */
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+/* The commit action does not scroll away with the settings above it. */
+.inspector__commit {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* All three views stay mounted, so switching tabs no longer throws away a
+   half-filled form, an unsaved set of API keys or the poll loop watching a
+   render. `hidden` is what takes the inactive ones out of the layout, out of
+   the tab order and out of the accessibility tree. */
+.view[hidden] {
+  display: none;
+}
+
+/* The running render, in the shell. Deliberately not a second task card: it
+   says what is happening and how far along, then hands the user back to the
+   tab that owns the detail. */
+.render-status {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.render-status:hover {
+  border-color: var(--border-strong);
+}
+
+.render-status__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.render-status__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.render-status--failed .render-status__label {
+  color: var(--danger);
+}
+
+/* Tabular figures so the percentage does not shuffle its own width every
+   poll, which on a 1.5s interval reads as the panel twitching. */
+.render-status__percent {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.render-status__stage {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+/* ---------- typography ---------- */
+
+.page-title {
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.page-subtitle {
+  margin: 0 0 24px;
+  color: var(--text-muted);
+}
+
+.section {
+  margin-bottom: 18px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.section__title {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+/* The content column runs to 940px, which is roughly 150 characters at this
+   size - far past the point where the eye loses the line on the way back. */
+.section__hint {
+  max-width: 62ch;
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- forms ---------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
+.field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+/* 12px, not 11px: this is where the app explains itself, so it is prose to be
+   read rather than a label to be glanced at. Same measure cap as above. */
+.field__hint {
+  max-width: 62ch;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+/* 260px, not 200px: at the window's full width the old floor produced eight
+   columns, and the Subtitles grid became a row of slivers. This lands on
+   two or three columns on a laptop and five or six on a wide monitor. */
+.grid {
+  display: grid;
+  gap: 0 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+input[type='text'],
+input[type='password'],
+input[type='number'],
+select,
+textarea {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  /* A flex container is block-level, so without this the label stretches the
+     full width of its section - and clicking a label toggles its checkbox.
+     Anywhere in that invisible band, including a click meant only to close an
+     open dropdown, would silently turn the setting off. */
+  width: fit-content;
+}
+
+.checkbox input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+
+/* The music preview sits under its select, so it takes the field width and a
+   height that does not tower over the controls around it. */
+.field__audio {
+  display: block;
+  width: 100%;
+  height: 34px;
+  margin-top: 8px;
+}
+
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-row input[type='color'] {
+  flex: none;
+  width: 34px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+/* ---------- buttons ---------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--text-faint);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+
+.button--danger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger);
+}
+
+.button--danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: transparent;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ---------- status ---------- */
+
+.banner {
+  display: flex;
+  gap: 10px;
+  padding: 11px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.banner--error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.banner--success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.banner--warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.banner__body {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  padding: 32px;
+  text-align: center;
+}
+
+.splash__title {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.splash__detail {
+  max-width: 560px;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border: 2.5px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+.progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress__bar {
+    transition: none;
+  }
+}
+
+/* ---------- task list ---------- */
+
+.task {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.task__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.task__id {
+  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Held apart from the actions that open the video, so the destructive one is
+   never the button next to the one the user actually wanted. The Library grid
+   is too narrow for a right edge and drops this margin. */
+.task__delete {
+  margin-left: auto;
+}
+
+.badge {
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.badge--processing {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.badge--complete {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.badge--failed {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.video-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.video-grid video {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
+/* One video is not a grid. `auto-fill` still lays out a full row of columns
+   and drops the only player into the first of them, hard against the left edge
+   of a card several times its width, with the rest of the row empty. A render
+   that finished is the subject of its card, so it sits in the middle of it. */
+.video-grid--single {
+  grid-template-columns: minmax(200px, 260px);
+  justify-content: center;
+}
+
+/* Clips arriving during the download stage. No fixed aspect ratio: these are
+   source clips of whatever shape the provider had, and the poster gives each
+   one its own. */
+.clip-strip {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.clip-strip video {
+  width: 100%;
+  max-height: 200px;
+  border-radius: var(--radius-sm);
+  background: #000;
+  object-fit: contain;
+}
+
+.empty {
+  padding: 44px 20px;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  padding: 2px 9px;
+  border-radius: 99px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* --- Material review -------------------------------------------------- */
+
+.review__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.review__title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.review__subtitle {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.review__header .badge {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.review__error {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* A grid on the same track size as the download strip above it. The two views
+   are the same clips a moment apart, so the list must not jump from a row of
+   thumbnails to a column of wide rows the instant the last download lands. */
+.review__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+
+.review__clip {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+/* Removed clips stay in place, greyed out, so the decision is reversible and
+   the timeline order never shifts under the reader. */
+.review__clip--removed {
+  opacity: 0.45;
+}
+
+/* Dragged card and its target. The target keeps its box and only changes
+   colour: shifting the row would move the drop point out from under the
+   cursor, which reads as the list fighting back. */
+.review__clip--dragging {
+  opacity: 0.4;
+}
+
+.review__clip--drop-target {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* A row above the thumbnail rather than a column beside it: the card is now
+   as wide as one grid track, and a vertical strip would eat a third of it.
+   Position badge and drag handle on the left, the two nudges on the right. */
+.review__reorder {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.review__reorder .review__handle {
+  margin-right: auto;
+}
+
+.review__handle,
+.review__move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.review__handle {
+  cursor: grab;
+}
+
+.review__handle:active {
+  cursor: grabbing;
+}
+
+.review__handle:hover:not(:disabled),
+.review__move:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.review__handle:disabled,
+.review__move:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The keep-order explanation sits under its checkbox, which already carries
+   the bottom margin, so this one only closes the gap to the list. */
+.review__note {
+  margin: -6px 0 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+/* Both the frame shape and the column width follow the video being made -
+   MaterialReview sets the two variables from the target aspect. The fallbacks
+   are the portrait defaults, so the rules still read on their own. */
+.review__media {
+  flex-shrink: 0;
+  width: 100%;
+}
+
+.review__video {
+  display: block;
+  width: 100%;
+  aspect-ratio: var(--review-aspect, 9 / 16);
+  max-height: 240px;
+  border-radius: var(--radius-sm);
+  background: #000;
+  object-fit: contain;
+}
+
+.review__no-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: var(--review-aspect, 9 / 16);
+  max-height: 240px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.review__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.review__clip-name {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.review__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.review__paragraph {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.review__body .button-row {
+  margin-top: auto;
+}
+
+.review__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.review__hint {
+  margin: 8px 0 0;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.review__expand {
+  display: block;
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
+.review__expand-hint {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+
+.review__expand:hover .review__expand-hint,
+.review__expand:focus-visible .review__expand-hint {
+  opacity: 1;
+}
+
+.review__modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.78);
+}
+
+.review__modal-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(92vw, 560px);
+  max-height: 92vh;
+}
+
+.review__modal-video {
+  width: 100%;
+  max-height: calc(92vh - 52px);
+  border-radius: var(--radius);
+  background: #000;
+  object-fit: contain;
+}
+
+.review__modal-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.review__modal-name {
+  flex: 1;
+  min-width: 0;
+  color: #e7eaee;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Library sections -------------------------------------------------- */
+
+.library__heading {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* A rule, not just space: the groups hold different things and the split has
+   to survive a long list of renders scrolling past it. */
+.library__heading--section {
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+/* --- Saved projects ---------------------------------------------------- */
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.project {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.project__body {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.project__title {
+  margin: 0 0 2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.project__meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.project__actions {
+  margin-left: auto;
+}
+
+.project-save__title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.project-save__hint {
+  margin: 0 0 14px;
+  max-width: 62ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.clip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.clip-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.clip-tile__video {
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  max-height: 200px;
+  border-radius: var(--radius-sm);
+  background: #000;
+  object-fit: contain;
+}
+
+.clip-tile__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.clip-tile__age {
+  color: var(--text-faint);
+}
+
+/* A ticked clip has to be findable while scanning a grid of twenty; the
+   checkbox on its own is too small to pick out. */
+.clip-tile--picked {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.clip-grid__total {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* --- Library grids ----------------------------------------------------- */
+
+/* Both sections use the same four columns so the page reads as one system.
+   auto-fit with a floor keeps them from becoming unusable slivers on a narrow
+   window - four is the target, not a promise. */
+.library__grid,
+.clip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+@media (min-width: 900px) {
+  .library__grid,
+  .clip-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Inside a grid cell a card is a tile: it no longer owns the row, so the
+   stacked bottom margin and the roomy padding both have to go. */
+.library__grid .task {
+  margin-bottom: 0;
+  padding: 12px;
+  gap: 8px;
+}
+
+.library__grid .task__id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.library__grid .video-grid {
+  grid-template-columns: 1fr;
+}
+
+/* No fixed aspect: the task record does not carry the shape it was rendered
+   at, and hard-coding portrait showed every landscape render as a letterboxed
+   strip. The poster gives the element its intrinsic ratio; the height cap
+   keeps a portrait render from towering over the card. */
+.library__grid .video-grid video {
+  max-height: 240px;
+  object-fit: contain;
+}
+
+/* Three actions do not fit side by side at this width; let them wrap and drop
+   the auto margin that pushed Delete to a right edge that no longer exists. */
+.library__grid .button-row {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library__grid .task__delete {
+  margin-left: 0;
+}
+
+.library__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 14px;
+}

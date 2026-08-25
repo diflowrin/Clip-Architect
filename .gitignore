@@ -1,0 +1,113 @@
+# Frontend
+node_modules/
+dist/
+*.local
+
+# Rust
+src-tauri/target/
+src-tauri/gen/
+
+# Python backend
+backend/.venv/
+backend/build/
+backend/__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# PyInstaller output, but keep the placeholder that Tauri's resource check needs
+backend/dist/backend/*
+!backend/dist/backend/README.txt
+
+# Internal notes. "-privat" is the convention for anything not meant to be
+# published: build steps, Partner Center values, certification risks, security
+# findings that are not fixed yet. A pattern rather than a list, because these
+# get written faster than a list gets updated - README-privat.md and
+# README-privat.TXT sat outside .gitignore for exactly that reason.
+*-privat.*
+*-privat
+
+# Runtime data, should never be committed: config.toml holds API keys
+backend/config.toml
+backend/storage/
+
+# Bundled LGPL FFmpeg (~110 MB). Fetch with scripts/fetch-ffmpeg.ps1.
+backend/resource/bin/ffmpeg.exe
+
+# Store packaging. The manifest, the build script and the identity values
+# Partner Center assigned are release plumbing, not application source: nothing
+# in the app builds, runs or is tested against them, and the only machine that
+# needs them is the one uploading a submission. They stay on disk - a Store
+# build reads them from here - and out of the repository, so publishing the
+# source never publishes the account it ships under.
+packaging/AppxManifest.xml
+packaging/build-msix.ps1
+packaging/identity.md
+
+# MSIX build artifacts
+packaging/staging/
+packaging/out/
+# Sideload test certificate. The .cer is only a public key, but it is a local
+# artifact tied to one machine's trust store, not something to ship.
+packaging/*.pfx
+packaging/*.cer
+
+# Non-redistributable assets pulled out of the upstream bundle. Kept locally
+# for reference; see LICENSES-third-party.md.
+packaging/removed-fonts/
+packaging/removed-songs/
+
+# Internal working notes. Same intent as the *-privat.* pattern above, but these
+# four keep their real names, because three of them are bound to the name:
+# Claude Code loads CLAUDE.md by that exact filename, and .impeccable/live/
+# roots.json points /impeccable at DESIGN.md and PRODUCT.md by absolute path.
+# Renaming them to *-privat.* would silently disable the tooling that writes
+# them, so they are listed here one by one instead. Leading slash: root only.
+/CLAUDE.md
+/DESIGN.md
+/PRODUCT.md
+/RECOMANDARI-UI.md
+
+# Design-tool working files (/impeccable critiques, question logs, live state).
+# Scratch space for the tooling, not project source - and .impeccable/live/
+# holds machine-local paths.
+.impeccable/
+**/.impeccable/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# impeccable-live-ignore-start
+.impeccable/hook.cache.json
+.impeccable/hook.pending.json
+.impeccable/config.local.json
+.impeccable/live/server.json
+.impeccable/live/roots.json
+.impeccable/live/app-root.json
+.impeccable/live/inject-journal.json
+.impeccable/live/sessions/
+.impeccable/live/previews/
+.impeccable/live/annotations/
+.impeccable/live/artifacts/
+.impeccable/live/accept-receipts/
+.impeccable/live/locks/
+.impeccable/live/cache/
+.impeccable/live/manual-edit-apply-transaction.json
+.impeccable/live/manual-edit-events.jsonl
+.impeccable/live/manual-edit-evidence/
+.impeccable/live/pending-manual-edits.json
+.impeccable/live/deferred-svelte-component-accepts.json
+.impeccable-live.json
+.impeccable-live/
+app/.impeccable-live/
+src/.impeccable-live/
+node_modules/.impeccable-live/
+src/lib/impeccable/ImpeccableLiveRoot.svelte
+src/lib/impeccable/__runtime.js
+src/lib/impeccable/[0-9a-f]*/
+plugins/impeccable-live.client.ts
+app/plugins/impeccable-live.client.ts
+src/plugins/impeccable-live.client.ts
+# impeccable-live-ignore-end

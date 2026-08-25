@@ -1,0 +1,20 @@
+    def test_primary_provider_tips_use_consistent_structure(self):
+        """中英文配置说明统一展示 API Key、Base URL 和模型名称。"""
+        i18n_dir = Path(__file__).parent.parent.parent / "webui" / "i18n"
+        for language in ("zh", "en"):
+            translations = json.loads(
+                (i18n_dir / f"{language}.json").read_text(encoding="utf-8")
+            )["Translation"]
+            for provider in LLM_PROVIDER_REGISTRY:
+                tips = translations[provider.tips_key]
+                self.assertTrue(tips.startswith("##### "), provider.provider_id)
+                self.assertIn("**API Key**", tips, provider.provider_id)
+                self.assertIn("**Base Url**", tips, provider.provider_id)
+                self.assertIn("**Model Name**", tips, provider.provider_id)
+
+        zh_kimi_tips = json.loads((i18n_dir / "zh.json").read_text(encoding="utf-8"))[
+            "Translation"
+        ]["llm_provider_tips.moonshot"]
+        self.assertIn("推荐理由：", zh_kimi_tips)
+        self.assertIn("视频创作链路匹配", zh_kimi_tips)
+

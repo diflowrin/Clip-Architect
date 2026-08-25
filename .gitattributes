@@ -1,0 +1,24 @@
+# Normalise line endings. The working tree is LF everywhere, including the
+# PowerShell scripts, so Windows checkouts must not silently rewrite it to CRLF
+# - a whole-file diff on a script hides the one line that changed.
+* text=auto eol=lf
+
+# Binary, never diffed or converted.
+*.png binary
+*.ico binary
+*.icns binary
+*.jfif binary
+*.mp3 binary
+*.ttf binary
+*.ttc binary
+*.exe binary
+*.pfx binary
+*.msix binary
+
+# .bat/.cmd are parsed by cmd.exe, which needs CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Generated lockfiles: collapse them in PR diffs.
+package-lock.json linguist-generated=true
+backend/uv.lock linguist-generated=true

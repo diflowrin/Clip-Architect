@@ -1,0 +1,29 @@
+/* The design system lives in App.css; this only carries the reset that has to
+   apply before the app mounts. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tauri webviews allow text selection and native context menus by default,
+   which makes the window feel like a web page rather than an app. Text inside
+   inputs and content areas stays selectable. */
+body {
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea,
+code,
+video,
+.splash__detail,
+.task__id {
+  user-select: text;
+}

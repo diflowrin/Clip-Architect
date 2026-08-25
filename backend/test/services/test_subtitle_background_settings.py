@@ -1,0 +1,162 @@
+import json
+from pathlib import Path
+import unittest
+
+import numpy as np
+
+from app.models.schema import SubtitleRequest, VideoParams
+from app.services import video
+
+
+class TestSubtitleBackgroundSettings(unittest.TestCase):
+    def test_subtitle_background_is_disabled_by_default(self):
+        """新任务和独立字幕接口都不应在用户未指定时渲染字幕背景。"""
+        video_params = VideoParams(video_subject="default subtitle background")
+        subtitle_request = SubtitleRequest(video_script="default subtitle background")
+
+        self.assertFalse(video_params.text_background_color)
+        self.assertFalse(subtitle_request.text_background_color)
+
+    def test_all_locales_include_subtitle_background_labels(self):
+        """
+        WebUI 新增字幕背景开关和颜色选择器后，所有已有语言都必须包含对应
+        翻译 key，避免某些语言界面直接显示英文内部 key。
+        """
+        i18n_dir = Path(__file__).parent.parent.parent / "webui" / "i18n"
+        required_keys = {
+            "Enable Subtitle Background",
+            "Subtitle Background Color",
+            "Subtitle Colors Are Indistinguishable",
+            "Subtitle Font Does Not Support Text",
+            "No Voice",
+        }
+
+        for locale_file in i18n_dir.glob("*.json"):
+            with self.subTest(locale=locale_file.name):
+                data = json.loads(locale_file.read_text(encoding="utf-8"))
+                translations = data.get("Translation", {})
+                missing_keys = required_keys - translations.keys()
+
+                self.assertEqual(missing_keys, set())
+
+    def test_video_params_accepts_disabled_and_colored_subtitle_background(self):
+        """
+        UI 会根据开关向后端传递 False 或颜色字符串。这里验证 schema 仍然
+        接受这两种值，避免后续依赖或类型调整破坏 WebUI 与合成逻辑的契约。
+        """
+        base_params = {
+            "video_subject": "subtitle background smoke",
+        }
+
+        disabled_params = VideoParams(
+            **base_params,
+            text_background_color=False,
+        )
+        colored_params = VideoParams(
+            **base_params,
+            text_background_color="#123456",
+        )
+
+        self.assertFalse(disabled_params.text_background_color)
+        self.assertEqual(colored_params.text_background_color, "#123456")
+
+    def test_visible_text_position_centers_actual_mask_bounds(self):
+        """
+        TextClip 的画布会包含字体行高和 baseline 空白，直接居中画布会让
+        字幕在背景里看起来偏下。这里用一个假 mask 模拟“可见文字像素
+        在画布下半部分”的情况，验证 helper 会按真实可见区域重新计算 y。
+        """
+
+        class FakeMask:
+            def get_frame(self, _):
+                mask = np.zeros((46, 100), dtype=float)
+                mask[12:46, 10:90] = 1.0
+                return mask
+
+        class FakeTextClip:
+            w = 100
+            h = 46
+            mask = FakeMask()
+
+        x, y = video._get_visible_center_position(
+            FakeTextClip(), container_width=100, container_height=93
+        )
+
+        self.assertEqual(x, 0)
+        # 可见像素高度为 34px，放在 93px 容器中应上下各约 29px；
+        # 因为 mask 顶部从 12px 开始，所以 TextClip 本身需要向上移动到 18px。
+        self.assertEqual(y, 18)
+
+    def test_detects_indistinguishable_subtitle_colors(self):
+        invisible_params = VideoParams(
+            video_subject="subtitle color validation",
+            text_fore_color="#000000",
+            text_background_color="#000000",
+            stroke_color="#000000",
+            stroke_width=1.5,
+        )
+        different_outline_params = VideoParams(
+            video_subject="subtitle color validation",
+            text_fore_color="#000000",
+            text_background_color="#000000",
+            stroke_color="#FFFFFF",
+            stroke_width=1.5,
+        )
+        background_disabled_params = VideoParams(
+            video_subject="subtitle color validation",
+            text_fore_color="#000000",
+            text_background_color=False,
+            stroke_color="#000000",
+            stroke_width=1.5,
+        )
+
+        self.assertTrue(
+            video.subtitle_colors_are_indistinguishable(invisible_params)
+        )
+        self.assertTrue(
+            video.subtitle_colors_are_indistinguishable(different_outline_params)
+        )
+        self.assertFalse(
+            video.subtitle_colors_are_indistinguishable(background_disabled_params)
+        )
+
+    def test_detects_font_without_chinese_glyphs(self):
+        fonts_dir = (
+            Path(__file__).parent.parent.parent / "resource" / "fonts"
+        )
+
+        self.assertFalse(
+            video.subtitle_font_supports_text(
+                str(fonts_dir / "BeVietnamPro-Bold.ttf"), "人工智能改变生活"
+            )
+        )
+        self.assertTrue(
+            video.subtitle_font_supports_text(
+                str(fonts_dir / "BeVietnamPro-Bold.ttf"), "Artificial intelligence"
+            )
+        )
+        # The positive CJK case used Microsoft YaHei, which was removed from the
+        # bundle for licensing reasons. It is not replaced with another font
+        # here because none of the remaining ones cover CJK.
+
+    def test_font_support_check_fails_open_for_unreadable_font(self):
+        """
+        An unreadable font reports as supported rather than unsupported.
+
+        That is deliberate upstream behaviour - an inspection failure should not
+        block generation - but it makes any assertion of the form "font X
+        supports script Y" pass vacuously when X is missing. Pinning it here is
+        what stops such a test from silently going green again.
+        """
+        self.assertTrue(
+            video.subtitle_font_supports_text(
+                str(Path(__file__).parent / "definitely-not-a-font.ttf"),
+                "人工智能改变生活",
+            )
+        )
+
+    # test_wrap_text_keeps_closing_punctuation_with_text lived here. It checks
+    # that a CJK full stop is never orphaned onto its own wrapped line, which
+    # requires a font with CJK glyphs - none ship any more. Restore it from
+    # packaging/removed-tests/ if an OFL CJK face such as Noto Sans SC is added.
+

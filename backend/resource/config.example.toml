@@ -1,0 +1,484 @@
+# MoneyPrinterTurbo configuration example.
+# The app copies this file to config.toml on first run. Keep API keys and other
+# credentials in config.toml; do not commit your local config.toml.
+
+# =============================================================================
+# API Service / API 服务
+# =============================================================================
+# Log level: DEBUG, INFO, WARNING, or ERROR.
+# INFO is the shipped default: the desktop app redirects the backend's output
+# into logs/backend.log, which is the file users are asked for when reporting a
+# problem, so it should not fill up with material nobody reads. Raise it to
+# DEBUG while diagnosing something.
+log_level = "INFO"
+# Use 127.0.0.1 for local-only access. 0.0.0.0 listens on all network interfaces.
+# The desktop app ignores this entirely: sidecar.py always binds loopback, and
+# the shell passes it a port. It applies only to a source run through upstream's
+# main.py, where 0.0.0.0 would put an unauthenticated API on the LAN - so the
+# default here is the safe one, not upstream's.
+listen_host = "127.0.0.1"
+listen_port = 8080
+
+[app]
+
+# Optional protection for API routes and generated files under /tasks.
+# Leave empty for local backward-compatible access. When configured, clients
+# must send the same value in the x-api-key request header. Keep real keys only
+# in config.toml and never commit them.
+# API 路由和 /tasks 生成文件的可选保护。留空时保持本地免认证行为；
+# 配置后客户端必须通过 x-api-key 请求头传入同一个值。
+# Task artifact requests also require this header; a browser address bar cannot
+# attach custom headers, so authenticated clients should download them via HTTP.
+# 任务产物下载同样需要该请求头；浏览器地址栏无法附加自定义请求头，启用鉴权后
+# 应由 API 客户端携带请求头下载。
+api_key = ""
+
+# -----------------------------------------------------------------------------
+# General / 通用设置
+# -----------------------------------------------------------------------------
+
+# Hide the basic configuration panel in the WebUI.
+# 是否隐藏 WebUI 基础配置面板。
+hide_config = false
+
+# Script generation backend. "local" keeps the existing LLM workflow.
+# "loomloom" uses a configured LoomLoom Market SkillBot to return multiple
+# independently generated script candidates. The WebUI integration is optional.
+script_generation_backend = "local"
+
+# LoomLoom Public API settings. The WebUI supports the public MoneyPrinterTurbo
+# SkillBot below out of the box. Configure the key in the WebUI or a private
+# config.toml, and never commit a real key. The fixed SkillBot accepts subject,
+# requirements, and candidateIndex for each row
+# and returns inline JSON {script, videoTerms} on port "output".
+loomloom_base_url = "https://loomloom.shengsuanyun.com/loom/v1"
+loomloom_api_token = ""
+loomloom_request_timeout_seconds = 30
+loomloom_poll_interval_seconds = 2
+loomloom_run_timeout_seconds = 600
+loomloom_video_run_timeout_seconds = 1800
+
+# Timeout in seconds for a single Edge TTS streaming request.
+# 单次 Edge TTS 流式请求超时时间。慢网络可适当调大，设置为 0 表示禁用超时。
+edge_tts_timeout = 30
+
+# Verify TLS certificates for external APIs and material downloads.
+# 默认应保持开启；仅在可信代理或自签名证书环境中临时关闭。
+tls_verify = true
+
+# -----------------------------------------------------------------------------
+# Video Materials / 视频素材
+# -----------------------------------------------------------------------------
+
+# Available values: "pexels", "pixabay", "coverr", "wavespeed", "loomloom",
+# "local".
+# "wavespeed" generates brand-new clips with WaveSpeed AI text-to-video models
+# instead of searching stock footage; generation is billed per request.
+# "loomloom" is a paid Shengsuan Cloud source and requires explicit
+# confirmation in the WebUI before each generation request.
+video_source = "pexels"
+
+# API key lists support key rotation. Use straight ASCII double quotes and
+# separate multiple keys with commas, for example: ["key-1", "key-2"].
+# Key 必须使用英文半角双引号，多个 Key 使用英文逗号分隔。
+
+# Register at https://www.pexels.com/api/
+pexels_api_keys = []
+
+# Register at https://pixabay.com/api/docs/
+pixabay_api_keys = []
+
+# Register at https://coverr.co/developers?ctx=header_navigation
+coverr_api_keys = []
+
+# WaveSpeed AI generates clips from your script keywords with text-to-video
+# models. Create an API key at https://wavespeed.ai
+wavespeed_api_keys = []
+# Optional. Any WaveSpeed text-to-video model id that accepts
+# prompt / aspect_ratio / duration works here.
+# wavespeed_text_to_video_model = "bytedance/seedance-2.0-fast/text-to-video"
+# The default model only accepts durations of 4-15 seconds. Requested clip
+# durations outside the range are clamped automatically before submission
+# (extra footage is trimmed by the editing pipeline). Override only if your
+# chosen model supports a different range.
+# wavespeed_min_duration = 4
+# wavespeed_max_duration = 15
+
+# Optional TwelveLabs integration for semantic material ranking and video QA.
+# Install the optional dependency with: uv sync --extra twelvelabs
+# Create an API key at https://playground.twelvelabs.io/
+twelvelabs_api_keys = []
+# Reorder search terms using Marengo before downloading materials. This option
+# is ignored when match_materials_to_script is enabled.
+twelvelabs_rerank_terms = false
+# Optional model overrides. Uncomment only when a different model is required.
+# twelvelabs_marengo_model = "marengo3.0"
+# twelvelabs_pegasus_model = "pegasus1.5"
+
+# Match search terms and downloaded materials to the script narrative order.
+# 默认关闭，开启后会减少随机性，使素材顺序更贴近文案结构。
+match_materials_to_script = false
+
+# Optional Sonilo video-matched original background music.
+# Create a key at https://platform.sonilo.com/dashboard. The WebUI can also save
+# this value, or you can set the SONILO_API_KEY environment variable instead.
+sonilo_api_key = ""
+sonilo_base_url = "https://api.sonilo.com"
+# 单次生成流连续无数据时的最长等待秒数；它不是整个请求的总耗时上限。
+sonilo_timeout = 600
+
+# -----------------------------------------------------------------------------
+# LLM Providers / 大模型提供商
+# -----------------------------------------------------------------------------
+
+# Provider definitions, default models, and default Base URLs are maintained in
+# app/models/llm_provider.py. Leave model_name and base_url empty to follow the
+# Registry defaults; only set them when you need an explicit override.
+#
+# OpenRouter by default, on a free model. It is the only provider here whose
+# default costs nothing to call, and its catalogue is served unauthenticated,
+# so the model list is on screen before a key exists. Every other provider
+# starts by asking for a paid account.
+llm_provider = "openrouter"
+
+# Kimi / Moonshot AI
+# API key: https://platform.kimi.com?track_id=track-2f5441d6ffd84c509dd079d78e9db5dc&aff=moneyprinterturbo
+moonshot_api_key = ""
+moonshot_base_url = ""
+moonshot_model_name = ""
+
+# Shengsuan Cloud, OpenAI-compatible multi-model API.
+# API docs: https://lean.shengsuanyun.com/apidocs/api/openai-api
+shengsuanyun_api_key = ""
+shengsuanyun_base_url = ""
+shengsuanyun_model_name = ""
+
+# OpenAI or another OpenAI Chat Completions-compatible provider.
+# API key: https://platform.openai.com/api-keys
+openai_api_key = ""
+openai_base_url = ""
+openai_model_name = ""
+
+# Anthropic Claude, called through the OpenAI-compatible endpoint.
+# API key: https://platform.claude.com/settings/keys
+anthropic_api_key = ""
+anthropic_base_url = ""
+anthropic_model_name = ""
+
+# Google Gemini
+# API key: https://aistudio.google.com/app/apikey
+gemini_api_key = ""
+gemini_model_name = ""
+
+# DeepSeek
+# API key: https://platform.deepseek.com/api_keys
+deepseek_api_key = ""
+deepseek_base_url = ""
+deepseek_model_name = ""
+
+# Alibaba Cloud Qwen
+# API key: https://dashscope.console.aliyun.com/apiKey
+qwen_api_key = ""
+qwen_model_name = ""
+
+# Microsoft Azure OpenAI. model_name is the deployment name.
+# Documentation: https://learn.microsoft.com/azure/ai-services/openai/reference
+azure_api_key = ""
+azure_base_url = ""
+azure_model_name = ""
+azure_api_version = "2024-02-15-preview"
+
+# ByteDance VolcEngine Ark
+# Console: https://console.volcengine.com/ark
+volcengine_api_key = ""
+volcengine_base_url = ""
+volcengine_model_name = ""
+
+# xAI Grok
+# API key: https://console.x.ai/
+grok_api_key = ""
+grok_base_url = ""
+grok_model_name = ""
+
+# MiniMax. The API key and Base URL must use the same platform.
+# China: https://platform.minimaxi.com/ | https://api.minimaxi.com/v1
+# International: https://platform.minimax.io/ | https://api.minimax.io/v1
+minimax_api_key = ""
+minimax_base_url = ""
+minimax_model_name = ""
+
+# Xiaomi MiMo
+# Documentation: https://platform.xiaomimimo.com/docs/zh-CN/quick-start/first-api-call
+mimo_api_key = ""
+mimo_base_url = ""
+mimo_model_name = ""
+
+# Cloudflare AI Gateway. The token requires AI Gateway Read/Edit and Workers AI
+# Read permissions. Leave gateway_id empty to use the Registry default.
+# Dashboard: https://dash.cloudflare.com/
+cloudflare_api_key = ""
+cloudflare_account_id = ""
+cloudflare_gateway_id = ""
+cloudflare_model_name = ""
+
+# Alibaba ModelScope. Bind an Alibaba Cloud account before using API inference.
+# Documentation: https://modelscope.cn/docs/model-service/API-Inference/intro
+modelscope_api_key = ""
+modelscope_base_url = ""
+modelscope_model_name = ""
+
+# OpenRouter, an OpenAI-compatible gateway in front of several hundred models,
+# and the default provider above. Settings offers the live catalogue, filtered
+# to free models by default; any model id can also be typed by hand, which is
+# how a model newer than the catalogue gets used.
+# A key is required even for the free models, but it costs nothing.
+# API key: https://openrouter.ai/settings/keys
+openrouter_api_key = ""
+openrouter_base_url = ""
+openrouter_model_name = ""
+
+# AIHubMix, an OpenAI-compatible multi-model gateway.
+# API key: https://aihubmix.com/
+aihubmix_api_key = ""
+aihubmix_base_url = ""
+aihubmix_model_name = ""
+
+# AIML API, an OpenAI-compatible multi-model API.
+# API key: https://aimlapi.com/app/keys
+aimlapi_api_key = ""
+aimlapi_base_url = ""
+aimlapi_model_name = ""
+
+# EvoLink, an OpenAI-compatible multi-model gateway.
+# API key: https://evolink.ai/dashboard/keys
+evolink_api_key = ""
+evolink_base_url = ""
+evolink_model_name = ""
+
+# Ollama. Leave base_url empty to use the environment-aware local default.
+# Set model_name to a model installed by `ollama pull` or shown by `ollama list`.
+ollama_base_url = ""
+ollama_model_name = ""
+
+# OneAPI. Use the token, Base URL, and model ID from your OneAPI deployment.
+# Project: https://github.com/songquanpeng/one-api
+oneapi_api_key = ""
+oneapi_base_url = ""
+oneapi_model_name = ""
+
+# LiteLLM uses provider credentials from environment variables, such as
+# OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or AWS_ACCESS_KEY_ID.
+# Model formats: openai/gpt-4o, anthropic/claude-sonnet-4, ollama/llama3.
+# Providers: https://docs.litellm.ai/docs/providers
+litellm_model_name = ""
+
+# Groq
+# API key: https://console.groq.com/keys
+groq_api_key = ""
+groq_base_url = ""
+groq_model_name = ""
+
+# Pollinations AI: https://enter.pollinations.ai/
+pollinations_api_key = ""
+pollinations_base_url = ""
+pollinations_model_name = ""
+
+# -----------------------------------------------------------------------------
+# Speech, Subtitles, and Video / 语音、字幕与视频
+# -----------------------------------------------------------------------------
+
+# Xiaomi MiMo TTS shares mimo_api_key and mimo_base_url with the MiMo LLM.
+mimo_tts_model_name = "mimo-v2.5-tts"
+mimo_tts_style_prompt = "请用自然、清晰、适合短视频旁白的语气朗读。"
+
+# Subtitle provider: "edge" or "whisper". Whisper is loaded only when selected
+# explicitly; Edge failures do not trigger an automatic Whisper model download.
+# Leave empty to skip generation.
+subtitle_provider = "edge"
+
+# FFmpeg is normally downloaded and detected automatically. If detection fails,
+# download it from https://www.gyan.dev/ffmpeg/builds/ and set the executable.
+# Windows example: ffmpeg_path = "C:\\path\\to\\ffmpeg.exe"
+# ffmpeg_path = ""
+
+# Leave unset to follow the app default (libx264). Hardware encoders are optional;
+# unsupported encoders automatically fall back to libx264.
+# Available values: "libx264", "h264_nvenc", "h264_amf", "h264_qsv",
+# "h264_mf", "h264_videotoolbox".
+# video_codec = "libx264"
+
+# -----------------------------------------------------------------------------
+# Storage and Task Runtime / 存储与任务运行
+# -----------------------------------------------------------------------------
+
+# Public base URL used to build generated video download links. Leave empty to
+# use the current API service address, or set an external reverse-proxy URL.
+endpoint = ""
+
+# Material storage: "" uses ./storage/cache_videos, "task" stores materials in
+# each task directory, and an absolute path stores materials in that directory.
+# The default keeps clips reusable across tasks. It does not affect the review
+# screen: that flow always stores into the task directory, because the stream
+# route serves nothing else and a preview must not depend on a setting.
+# Example: material_directory = "/path/to/videos"
+material_directory = ""
+
+# Optional Redis-backed task state. Keep Redis private to this application;
+# untrusted writers must not be able to modify serialized task records.
+enable_redis = false
+redis_host = "localhost"
+redis_port = 6379
+redis_db = 0
+redis_password = ""
+
+# Maximum number of concurrent and queued API video-generation tasks.
+max_concurrent_tasks = 5
+max_queued_tasks = 100
+
+# -----------------------------------------------------------------------------
+# Cross-platform Publishing / 跨平台发布
+# -----------------------------------------------------------------------------
+
+# Upload-Post can publish generated videos to TikTok, Instagram, and YouTube.
+# Create an account and API key at https://upload-post.com/
+# API documentation: https://docs.upload-post.com/
+upload_post_enabled = false
+upload_post_api_key = ""
+upload_post_username = ""
+# Available values: "tiktok", "instagram", "youtube".
+upload_post_platforms = ["tiktok", "instagram"]
+# Automatically publish successful video outputs after generation.
+upload_post_auto_upload = false
+# YouTube privacy: "public", "unlisted", or "private".
+upload_post_youtube_privacy_status = "public"
+# Maximum number of running and queued cross-post jobs per process. When the
+# limit is reached, video generation still succeeds and only cross-posting is
+# rejected.
+# Cross-post jobs run in the current process and are not resumed after restart.
+upload_post_max_pending_tasks = 10
+
+# =============================================================================
+# Whisper Subtitles / Whisper 字幕
+# =============================================================================
+
+[whisper]
+# The model is downloaded automatically on first use unless a matching local
+# directory exists at ./models/whisper-{model_size}.
+model_size = "large-v3"
+# device: "cpu" or "cuda". Common compute types include "int8" for CPU and
+# "float16" or "int8_float16" for CUDA.
+device = "cpu"
+compute_type = "int8"
+# Optional prompt that biases Whisper's decoder toward specific vocabulary
+# (brand names, technical terms). Passed as initial_prompt to transcribe().
+# Leave empty to disable.
+# initial_prompt = ""
+
+# =============================================================================
+# Material Request Proxy / 素材请求代理
+# =============================================================================
+
+[proxy]
+# Optional proxy used by Pexels, Pixabay, Coverr, and material downloads.
+# Format: "http://<username>:<password>@<proxy>:<port>"
+# Documentation: https://requests.readthedocs.io/en/latest/user/advanced/#proxies
+# http = "http://127.0.0.1:3128"
+# https = "http://127.0.0.1:1080"
+
+# =============================================================================
+# TTS Providers / 语音合成服务
+# =============================================================================
+
+[azure]
+# Azure Speech TTS credentials. These are separate from Azure OpenAI settings.
+# API key: https://portal.azure.com/#view/Microsoft_Azure_ProjectOxford/CognitiveServicesHub/~/SpeechServices
+speech_key = ""
+speech_region = ""
+
+[siliconflow]
+# SiliconFlow TTS API key: https://siliconflow.cn/
+api_key = ""
+
+[minimax_tts]
+# API key: https://platform.minimax.io/user-center/basic-information/interface-key
+# Global endpoint: https://api.minimax.io/v1/t2a_v2
+# China endpoint: https://api.minimaxi.com/v1/t2a_v2
+# When api_key is empty, the MiniMax LLM key and its matching regional endpoint
+# are reused automatically. Set both fields only when TTS uses a separate key.
+api_key = ""
+base_url = ""
+model_id = "speech-2.8-hd"
+voice_id = "English_expressive_narrator"
+sample_rate = 32000
+bitrate = 128000
+audio_format = "mp3"
+channel = 1
+pitch = 0
+
+[elevenlabs]
+# API key: https://elevenlabs.io/app/settings/api-keys
+# Every voice on the account is offered under the ElevenLabs voice engine.
+api_key = ""
+# Available models include eleven_multilingual_v2, eleven_flash_v2_5, and eleven_v3.
+model_id = "eleven_multilingual_v2"
+# Video-to-Music uses a separate model family while sharing the same API key.
+music_model_id = "music_v2"
+music_timeout = 600
+
+[chatterbox]
+# OpenAI-compatible Chatterbox TTS server. The defaults target
+# travisvn/chatterbox-tts-api running locally on port 4123.
+base_url = "http://127.0.0.1:4123/v1"
+api_key = ""
+model_id = "chatterbox"
+# Voice names exposed by the configured Chatterbox server.
+voices = ["default-Female"]
+
+# =============================================================================
+# WebUI Preferences / WebUI 偏好
+# =============================================================================
+
+[ui]
+# Hide generation logs in the WebUI.
+hide_log = false
+
+# Open the task folder automatically after video generation completes.
+# 视频生成完成后是否自动打开任务目录；关闭后仍可在任务管理中手动打开。
+open_task_folder_on_completion = true
+
+# The WebUI writes the remaining preferences automatically. Uncomment values
+# below only when you want to define initial defaults manually.
+# language = "zh"
+# video_language = ""
+# paragraph_number = 1
+# video_script_prompt = ""
+# custom_system_prompt = ""
+# loomloom_candidate_count = 3
+# loomloom_script_duration_seconds = 60
+# loomloom_video_scene_count = 1
+# video_concat_mode = "random"       # "random" or "sequential"
+# video_transition_mode = "None"     # "None", "Shuffle", "FadeIn", etc.
+# video_aspect_pexels = "9:16"       # Stored separately for each video source.
+# video_clip_duration = 3
+# video_clip_speed = 1.0
+# video_count = 1
+# tts_server = "azure-tts-v1"
+# voice_name = ""
+# voice_volume = 1.0
+# voice_rate = 1.0
+# bgm_type = "random"
+# bgm_volume = 0.2
+# custom_bgm_file = ""
+# sonilo_bgm_prompt = ""
+# elevenlabs_music_prompt = ""
+# subtitle_enabled = true
+# font_name = "MicrosoftYaHeiBold.ttc"
+# font_size = 60
+# text_fore_color = "#FFFFFF"
+# stroke_color = "#000000"
+# stroke_width = 1.5
+# subtitle_position = "bottom" # "top", "center", "bottom", or "custom"
+# custom_position = 70.0       # Percentage from the top when using "custom"
+# subtitle_background_enabled = false
+# subtitle_background_color = "#000000"
+# rounded_subtitle_background = false
