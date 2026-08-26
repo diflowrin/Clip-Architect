@@ -42,7 +42,7 @@ export default function App() {
     <div className="app">
       <nav className="sidebar">
         <div className="sidebar__brand">
-          <span className="sidebar__brand-name">ClipArchitect</span>
+          <span className="sidebar__brand-name">Clip Architect</span>
           <span className="sidebar__brand-version">0.1.0</span>
         </div>
 
@@ -101,7 +101,7 @@ export default function App() {
               onReEdit={handleReEdit}
             />
           </div>
-          <div className="view view--reading" hidden={tab !== 'settings'}>
+          <div className="view view--reading view--settings" hidden={tab !== 'settings'}>
             <SettingsView api={api} dataDir={dataDir} />
           </div>
         </div>
@@ -151,7 +151,7 @@ function StartupScreen({ status }: { status: ReturnType<typeof useBackend>['stat
         <p className="splash__detail">{status.message}</p>
         <p className="splash__detail">
           Restart the app. If this keeps happening, <code>logs/backend.log</code> in the app
-          data folder holds the engine's own output, and <code>logs/ClipArchitect.log</code>{' '}
+          data folder holds the engine's own output, and <code>logs/Clip Architect.log</code>{' '}
           holds the shell's.
         </p>
       </div>

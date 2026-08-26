@@ -719,6 +719,13 @@ export function GenerateView({
     stopPolling();
     setError(null);
     setNotice(`Loaded "${project.title}". Adjust anything, then render again.`);
+    // Re-edit lands on the editor, not on the last video. The Library button
+    // says what the user asked for, and stopping at the result screen first -
+    // with a "Make another video" press still to come - made the app look as
+    // if it had ignored the request. The last render is still one press away
+    // from here, via "Back to last video".
+    // oxlint-disable-next-line react/set-state-in-effect
+    setMode('form');
     onProjectApplied?.();
 
     // Reopening the saved footage is what makes this a re-edit rather than a

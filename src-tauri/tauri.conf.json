@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "ClipArchitect",
+  "productName": "Clip Architect",
   "version": "0.1.0",
   "identifier": "com.cliparchitect.desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ClipArchitect",
+        "title": "Clip Architect",
         "width": 1280,
         "height": 860,
         "minWidth": 960,

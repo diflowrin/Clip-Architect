@@ -37,6 +37,16 @@ service that starts and stops with the app.
 except to the provider you chose, with the key you supplied. No account, no
 subscription, no cloud render queue.
 
+## See one
+
+<div align="center">
+
+[<img src="https://img.youtube.com/vi/S8d96ijZHu4/maxresdefault.jpg" alt="Bass Through the Cosmos — a short made with Clip Architect" width="560" />](https://youtu.be/S8d96ijZHu4)
+
+**[Bass Through the Cosmos](https://youtu.be/S8d96ijZHu4)** — made with Clip Architect.
+
+</div>
+
 ## Features
 
 - **Script and keywords from any of 23 LLM providers** — OpenAI, Anthropic

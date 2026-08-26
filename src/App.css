@@ -87,9 +87,13 @@ body {
 
 /* ---------- app shell ---------- */
 
+/* `minmax(0, …)` and not a bare `1fr`: a grid track sized `1fr` still refuses
+   to shrink below the widest thing inside it, so one over-wide card pushed the
+   whole window into a horizontal scrollbar instead of being clipped by the
+   view that owns the scrolling. */
 .app {
   display: grid;
-  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   height: 100%;
 }
 
@@ -186,12 +190,32 @@ body {
   min-height: 0;
 }
 
-/* The reading views own their scrollbar now that .main no longer has one. */
+/* The reading views own their scrollbar now that .main no longer has one.
+   No width cap and no centring: the Library is a grid of tiles and Settings is
+   a stack of panels, and both were reading as a narrow strip down the middle of
+   a wide window with the rest of it empty. Width is what turns the Library's
+   grid into more columns instead of a longer scroll. Prose still keeps its own
+   measure - subtitles and hints are capped at 62ch - so a wide window widens
+   the tiles and the panels, never the sentences. */
 .view--reading {
   width: 100%;
-  max-width: 940px;
-  margin: 0 auto;
   overflow-y: auto;
+}
+
+/* Settings is a form, and a form on a full-width page needs its controls held
+   back: an API key field drawn across a whole monitor is harder to read than a
+   short one, and a lone select stretched to the same width looks broken. The
+   panels take the width; the inputs inside them keep a hand's span. Capping the
+   grid track rather than the section is what lets a second field move up beside
+   the first instead of both being stretched. */
+.view--settings .grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 460px));
+}
+
+.view--settings .field > input,
+.view--settings .field > select,
+.view--settings .field > textarea {
+  max-width: 460px;
 }
 
 /* ---------- form page ---------- */
@@ -602,7 +626,11 @@ body {
   letter-spacing: -0.015em;
 }
 
+/* Capped like every other run of prose in the app: the page is full width now,
+   and a subtitle set across the whole of a wide monitor is a line the eye loses
+   on the way back to the left edge. */
 .page-subtitle {
+  max-width: 62ch;
   margin: 0 0 24px;
   color: var(--text-muted);
 }
@@ -951,6 +979,9 @@ input[type='range'] {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* Players are sized from their own aspect below, so a column wider than the
+     player has to place it rather than stretch it. */
+  justify-items: center;
 }
 
 .video-grid video {
@@ -962,10 +993,26 @@ input[type='range'] {
 /* One video is not a grid. `auto-fill` still lays out a full row of columns
    and drops the only player into the first of them, hard against the left edge
    of a card several times its width, with the rest of the row empty. A render
-   that finished is the subject of its card, so it sits in the middle of it. */
+   that finished is the subject of its card, so it sits in the middle of it.
+
+   Sized by height rather than by width. A single column capped at 260px is a
+   reasonable portrait player and a postage stamp for a landscape one - 16:9 in
+   that column is 146px tall, smaller than the buttons under it. The card does
+   not know which shape it got, but the player does: the poster gives it its
+   intrinsic ratio, so fixing the height and letting the width follow gives
+   every aspect the same amount of screen. `max-width` is what keeps a very
+   wide render inside a narrow card, at which point width takes over and the
+   height comes back down with it. */
 .video-grid--single {
-  grid-template-columns: minmax(200px, 260px);
+  grid-template-columns: auto;
   justify-content: center;
+}
+
+.video-grid--single video {
+  width: auto;
+  max-width: 100%;
+  height: min(60vh, 520px);
+  object-fit: contain;
 }
 
 /* Clips arriving during the download stage. No fixed aspect ratio: these are
@@ -1435,21 +1482,16 @@ input[type='range'] {
 
 /* --- Library grids ----------------------------------------------------- */
 
-/* Both sections use the same four columns so the page reads as one system.
-   auto-fit with a floor keeps them from becoming unusable slivers on a narrow
-   window - four is the target, not a promise. */
+/* Both sections use the same track size so the page reads as one system. The
+   count is left to the window rather than fixed at four: the page runs the full
+   width now, and four columns of it made each render a poster. `auto-fill`, not
+   `auto-fit`, so a Library holding two tiles shows two tiles rather than two
+   billboards - the empty tracks stay empty. */
 .library__grid,
 .clip-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
-}
-
-@media (min-width: 900px) {
-  .library__grid,
-  .clip-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
 }
 
 /* Inside a grid cell a card is a tile: it no longer owns the row, so the
@@ -1467,8 +1509,11 @@ input[type='range'] {
   font-size: 11px;
 }
 
+/* `minmax(0, 1fr)`: a bare `1fr` floors the column at the player's intrinsic
+   width, which is the render's own pixel width and far wider than a tile. That
+   is what pushed the grid past the page and put a scrollbar under it. */
 .library__grid .video-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* No fixed aspect: the task record does not carry the shape it was rendered
