@@ -6,9 +6,14 @@
 
 **Turn a topic into a finished short video — on your own machine, with your own keys.**
 
+[<img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get Clip Architect from the Microsoft Store" height="56" />](https://apps.microsoft.com/store/detail/9NG0GZBHJMLR?cid=DevShareMCLPCS)
+
+**[Install from the Microsoft Store](https://apps.microsoft.com/store/detail/9NG0GZBHJMLR?cid=DevShareMCLPCS)** — one click, no build steps, updates handled by Windows.
+
 [![Website](https://img.shields.io/badge/website-diflowrin.com-1f6feb.svg)](https://diflowrin.com)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
 [![Commercial license available](https://img.shields.io/badge/commercial_license-available-8957e5.svg)](COMMERCIAL-LICENSE.md)
+[![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-9NG0GZBHJMLR-0078d4.svg?logo=windows)](https://apps.microsoft.com/store/detail/9NG0GZBHJMLR?cid=DevShareMCLPCS)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4.svg)](#requirements)
 [![Tauri](https://img.shields.io/badge/shell-Tauri%202-24C8DB.svg)](https://tauri.app)
 [![React](https://img.shields.io/badge/ui-React%2019-61DAFB.svg)](https://react.dev)
@@ -287,6 +292,13 @@ author cannot waive.
 music, FFmpeg and codec selection, and documents what was removed from upstream
 and why. Read it before shipping — several of those removals were licensing
 blockers, not cleanups.
+
+[`licenses/`](licenses/) is the copy that ships. The folder is bundled as an
+application resource, so an installed Clip Architect carries the GPL-3.0, MIT,
+LGPL, OFL and Python dependency texts on disk beside the executable, where
+several of those licences require them to be. `LICENSES-third-party.md` holds
+the reasoning; [`licenses/THIRD-PARTY-NOTICES.md`](licenses/THIRD-PARTY-NOTICES.md)
+is the notice a user or a certification reviewer actually reads.
 
 ## Credits
 
