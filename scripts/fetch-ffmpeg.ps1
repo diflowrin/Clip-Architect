@@ -16,6 +16,11 @@
 
     See LICENSES-third-party.md for the full reasoning.
 
+    Also writes licenses/FFMPEG-BUILD.txt, the exact version and configuration
+    of the binary that was fetched. That file is what the LGPL source offer in
+    licenses/THIRD-PARTY-NOTICES.md points a user at, so it has to describe the
+    build actually in the package.
+
 .PARAMETER Release
     BtbN release tag. "latest" tracks their rolling build.
 #>
@@ -72,6 +77,28 @@ if ($configuration -match "--enable-gpl") {
     Remove-Item $destination -Force
     throw "Downloaded build is GPL (--enable-gpl). Expected an LGPL build; refusing to keep it."
 }
+
+# Record which build actually shipped. What the binary may be redistributed
+# under follows from its configuration - --enable-version3 without --enable-gpl
+# makes it LGPL v3 - and the source offer in licenses/THIRD-PARTY-NOTICES.md has
+# to name a version precisely enough that someone can go and fetch it.
+$buildNotes = Join-Path $projectDir "licenses/FFMPEG-BUILD.txt"
+$notesHeader = @"
+FFmpeg build shipped with Clip Architect
+========================================
+
+This is the exact identification of the ffmpeg.exe inside this application,
+written by scripts/fetch-ffmpeg.ps1 when the binary was fetched. It records
+which external libraries are compiled into it, since that is what determines
+the terms the binary is distributed under.
+
+The build is an unmodified LGPL build published by BtbN/FFmpeg-Builds. It is
+configured with --enable-version3 and without --enable-gpl, so the binary as a
+whole is under LGPL v3; see THIRD-PARTY-NOTICES.md for the source offer.
+
+"@
+$banner = & $destination -version 2>&1
+($notesHeader + "`r`n" + ($banner -join "`r`n")) | Out-File $buildNotes -Encoding utf8
 
 $sizeMb = [Math]::Round((Get-Item $destination).Length / 1MB, 1)
 Write-Host "Installed LGPL FFmpeg at $destination ($sizeMb MB)."

@@ -8,6 +8,7 @@ import {
   type Settings,
 } from '../lib/api';
 import { Banner } from '../components/Banner';
+import { LicensesDialog } from '../components/LicensesDialog';
 
 interface Props {
   api: BackendApi;
@@ -53,6 +54,7 @@ export function SettingsView({ api, dataDir }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [revealKeys, setRevealKeys] = useState(false);
+  const [licensesOpen, setLicensesOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -413,11 +415,35 @@ export function SettingsView({ api, dataDir }: Props) {
         </div>
       </section>
 
+      <section className="section">
+        <h2 className="section__title">About</h2>
+        <div className="field">
+          <span className="field__label">Licenses</span>
+          <span className="field__hint">
+            Clip Architect is free software under the GNU GPL v3, and it bundles
+            FFmpeg, two open fonts and a Python runtime, each under its own terms.
+            Every one of those licence texts is installed with the app and can be
+            read here.
+          </span>
+          <div className="button-row">
+            <button
+              type="button"
+              className="button"
+              onClick={() => setLicensesOpen(true)}
+            >
+              View licenses
+            </button>
+          </div>
+        </div>
+      </section>
+
       <div className="button-row">
         <button className="button button--primary" onClick={handleSave} disabled={saving}>
           {saving ? 'Saving…' : 'Save settings'}
         </button>
       </div>
+
+      {licensesOpen && <LicensesDialog onClose={() => setLicensesOpen(false)} />}
     </>
   );
 }

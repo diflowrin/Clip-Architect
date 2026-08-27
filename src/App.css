@@ -1543,3 +1543,139 @@ input[type='range'] {
   gap: 10px;
   margin-top: 14px;
 }
+
+/* --- Licenses ---------------------------------------------------------- */
+
+/* The notices are read here rather than in Explorer: an MSIX install folder is
+   not browsable by the person who installed it, so the dialog is the only
+   route to text that several licences require to be readable at all. */
+.licenses {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 14, 0.78);
+}
+
+.licenses__inner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(1040px, 100%);
+  max-height: 92vh;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.licenses__bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.licenses__title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.licenses__subtitle {
+  margin: 0;
+  max-width: 74ch;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.licenses__bar .button {
+  margin-left: auto;
+  flex: none;
+}
+
+.licenses__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.licenses__body {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  gap: 14px;
+  flex: 1;
+  /* Without this the grid takes its height from the 550 KB of text in the
+     right-hand pane and the dialog grows past the window instead of scrolling
+     inside it. */
+  min-height: 0;
+}
+
+.licenses__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 4px;
+  overflow-y: auto;
+}
+
+.licenses__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.licenses__item:hover {
+  color: var(--text);
+  background: var(--bg);
+}
+
+.licenses__item[aria-current='true'] {
+  color: var(--text);
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+}
+
+.licenses__item-title {
+  font-size: 13px;
+}
+
+.licenses__item-name {
+  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.licenses__text {
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  /* Licence text is hard-wrapped at 70-80 columns, but the Python inventory
+     carries lines far longer than that. Wrap rather than scroll sideways
+     through 500 KB. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.field .button-row {
+  margin-top: 4px;
+}

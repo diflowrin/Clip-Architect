@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Clip Architect",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.cliparchitect.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -37,7 +37,10 @@
     ],
     "resources": {
       "../backend/resource/": "resource/",
-      "../backend/dist/backend/": "backend/"
+      "../backend/dist/backend/": "backend/",
+      "../licenses/": "licenses/",
+      "../LICENSE": "licenses/LICENSE.txt",
+      "../LICENSE-MoneyPrinterTurbo": "licenses/LICENSE-MoneyPrinterTurbo.txt"
     },
     "windows": {
       "webviewInstallMode": {

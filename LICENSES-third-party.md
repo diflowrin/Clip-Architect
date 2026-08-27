@@ -19,6 +19,37 @@ accepting the default Standard Application License Terms. The standard terms
 impose redistribution restrictions that conflict with GPL section 10's "no
 further restrictions" clause.
 
+## What ships inside the package
+
+Recording the terms here is not the same as honouring them. GPL-3.0, the LGPL
+that covers FFmpeg and the OFL that covers the fonts all require their text to
+travel **with the binary**, so the `licenses/` folder is declared in
+`bundle.resources` and lands next to the executable in the installed app:
+
+| Shipped file | Source | Covers |
+|---|---|---|
+| `LICENSE.txt` | repo `LICENSE` | Clip Architect, GPL-3.0 |
+| `LICENSE-MoneyPrinterTurbo.txt` | repo `LICENSE-MoneyPrinterTurbo` | upstream, MIT |
+| `THIRD-PARTY-NOTICES.md` | maintained by hand | the user-facing notice, and the GPL and LGPL source offers |
+| `FFMPEG-LICENSE.md`, `FFMPEG-BUILD.txt` | FFmpeg `n9.0`; the second written by `scripts/fetch-ffmpeg.ps1` | the bundled FFmpeg and everything compiled into it |
+| `LGPL-3.0.txt`, `LGPL-2.1.txt` | gnu.org | FFmpeg and edge-tts |
+| `OFL-1.1-BeVietnamPro.txt`, `OFL-1.1-Charm.txt` | each font's own repository | the subtitle fonts |
+| `LICENSES-python.txt` | `scripts/generate-python-licenses.ps1` | all 96 Python packages in the frozen backend |
+
+`build-msix.ps1` refuses to pack a staging folder that is missing any of them.
+
+One thing this section cannot say often enough: the package is assembled from
+`src-tauri/target/release`, a folder tauri-build only ever *adds* to. Deleting a
+track or a font from `backend/resource/` does not remove it from there, and the
+MSIX is packed from there — twelve tracks removed on 2026-08-25 for unverifiable
+provenance were still being staged on 2026-08-27. `ensure-resource-dirs.mjs`
+prunes that copy before every build, and `build-msix.ps1` compares the staged
+tree against `backend/resource/` and refuses to pack on any difference. Treat a
+removal as done only once one of those has run.
+The two root licence files are mapped into `licenses/` rather than copied into
+it, so there is one copy of each in the repository and no chance of the shipped
+text drifting from the real one.
+
 ## Application code
 
 | Component | Origin | License |
@@ -66,7 +97,9 @@ Apache-2.0 is compatible with GPLv3 (though not GPLv2).
 
 Both families are licensed under the
 [SIL Open Font License 1.1](https://scripts.sil.org/OFL), which explicitly
-permits bundling inside a commercial application.
+permits bundling inside a commercial application — provided the licence, with
+the font's own copyright line, is distributed alongside it. Each font's `OFL.txt`
+ships as `licenses/OFL-1.1-BeVietnamPro.txt` and `licenses/OFL-1.1-Charm.txt`.
 
 | Font | Copyright | License |
 |---|---|---|
@@ -187,6 +220,16 @@ Step 1 is what ships. The Rust shell sets `IMAGEIO_FFMPEG_EXE` to
 with `--disable-libx264 --disable-libx265`). Setting it explicitly also stops a
 stray FFmpeg on the user's `PATH` from changing which codecs are available.
 
+Two details that matter when the notice is written rather than when the codec is
+chosen. The build is also configured with `--enable-version3`, which pulls in
+components — aribb24, gmp, opencore-amr — that are LGPL **v3**, so the binary as
+distributed is under LGPL v3, not the v2.1 that covers most of FFmpeg's own
+source. Both texts therefore ship. And the exact build identification, including
+the full list of libraries linked into it, is written to
+`licenses/FFMPEG-BUILD.txt` by `scripts/fetch-ffmpeg.ps1` at fetch time: an LGPL
+source offer has to name a version somebody can go and retrieve, and "the latest
+BtbN build" is not one.
+
 The GPL build that `imageio-ffmpeg` carries — `gyan.dev` "essentials",
 `--enable-gpl --enable-version3`, linked against libx264/libx265 — is
 **stripped from the bundle** in `sidecar.spec`. The Python module stays, because
@@ -238,14 +281,27 @@ patent question above.
 
 The frozen backend embeds CPython 3.11 and its dependency tree (FastAPI,
 uvicorn, moviepy, litellm, faster-whisper, edge-tts and their transitive
-dependencies). These are predominantly MIT, BSD and Apache-2.0. Generate the
-full inventory for your submission records with:
+dependencies). These are predominantly MIT, BSD and Apache-2.0 — all of which
+require their notice to be redistributed with the binary, and the binary here is
+the frozen bundle. The full inventory, with the complete text of every licence,
+is generated into `licenses/LICENSES-python.txt` and ships with the app:
 
 ```
-cd backend
-uv run python -m pip install pip-licenses
-uv run pip-licenses --format=markdown --with-urls > ../LICENSES-python.md
+powershell -File scripts/generate-python-licenses.ps1
 ```
+
+Re-run it after changing backend dependencies; the output is committed so a
+release build needs no network. Four wheels (`ctranslate2`, `flatbuffers`,
+`loguru`, `tokenizers`) carry no licence file at all, and the script fetches
+those texts from the projects' own repositories using a table it keeps. A new
+dependency in the same position is a hard failure rather than a silent gap — the
+script stops and asks for its URL.
+
+Three entries are worth knowing about before a certification question arrives:
+**PyInstaller** is GPL v2 *with* the bundling exception that makes a frozen
+proprietary or GPL app legitimate; **azure-cognitiveservices-speech** is
+proprietary Microsoft code, redistributed under its own terms and inert without
+a user key; **edge-tts** is LGPL v3, used unmodified.
 
 ## Services contacted at runtime
 

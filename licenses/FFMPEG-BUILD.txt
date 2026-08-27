@@ -1,0 +1,24 @@
+﻿FFmpeg build shipped with Clip Architect
+========================================
+
+This is the exact identification of the ffmpeg.exe inside this application,
+written by scripts/fetch-ffmpeg.ps1 when the binary was fetched. It records
+which external libraries are compiled into it, since that is what determines
+the terms the binary is distributed under.
+
+The build is an unmodified LGPL build published by BtbN/FFmpeg-Builds. It is
+configured with --enable-version3 and without --enable-gpl, so the binary as a
+whole is under LGPL v3; see THIRD-PARTY-NOTICES.md for the source offer.
+
+ffmpeg version n9.0.1-6-g9d4ca21220-20260822 Copyright (c) 2000-2026 the FFmpeg developers
+built with gcc 15.2.0 (crosstool-NG 1.28.0.23_185f348)
+configuration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-w64-mingw32- --arch=x86_64 --target-os=mingw32 --enable-version3 --disable-debug --disable-w32threads --enable-pthreads --enable-iconv --enable-zlib --enable-libxml2 --enable-libvmaf --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libvorbis --disable-libxcb --disable-xlib --disable-libpulse --enable-gmp --enable-lzma --enable-liblcevc-dec --enable-opencl --enable-amf --enable-libaom --enable-libaribb24 --disable-avisynth --enable-chromaprint --enable-libdav1d --disable-libdavs2 --disable-libdvdread --disable-libdvdnav --disable-libfdk-aac --enable-ffnvcodec --enable-cuda-llvm --disable-frei0r --enable-libgme --enable-libkvazaar --enable-libaribcaption --enable-libass --enable-libbluray --enable-libjxl --enable-libmp3lame --enable-libopus --enable-libplacebo --enable-librist --enable-libssh --enable-libtheora --enable-libvpx --enable-libwebp --enable-libzmq --enable-lv2 --enable-libvpl --enable-openal --enable-liboapv --enable-libopencore-amrnb --enable-libopencore-amrwb --enable-libopenh264 --enable-libopenjpeg --enable-libopenmpt --enable-librav1e --disable-librubberband --enable-schannel --enable-sdl2 --enable-libsnappy --enable-libsoxr --enable-libsrt --enable-libsvtav1 --enable-libtwolame --enable-libuavs3d --disable-libdrm --enable-vaapi --disable-libvidstab --enable-libvvenc --disable-whisper --disable-libx264 --disable-libx265 --disable-libxavs2 --disable-libxvid --enable-libzimg --enable-libzvbi --extra-cflags=-DLIBTWOLAME_STATIC --extra-cxxflags= --extra-libs=-lgomp --extra-ldflags=-pthread --extra-ldexeflags= --cc=x86_64-w64-mingw32-gcc --cxx=x86_64-w64-mingw32-g++ --ar=x86_64-w64-mingw32-gcc-ar --ranlib=x86_64-w64-mingw32-gcc-ranlib --nm=x86_64-w64-mingw32-gcc-nm --extra-version=20260822
+libavutil      61.  1.101 / 61.  1.101
+libavcodec     63.  1.101 / 63.  1.101
+libavformat    63.  1.101 / 63.  1.101
+libavdevice    63.  1.101 / 63.  1.101
+libavfilter    12.  1.101 / 12.  1.101
+libswscale     10.  1.101 / 10.  1.101
+libswresample   7.  1.101 /  7.  1.101
+
+Exiting with exit code 0

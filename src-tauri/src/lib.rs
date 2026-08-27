@@ -1,4 +1,5 @@
 mod backend;
+mod licenses;
 
 use std::sync::Mutex;
 use std::time::Duration;
@@ -103,7 +104,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(BackendProcess::default())
         .manage(BackendStatusState::default())
-        .invoke_handler(tauri::generate_handler![backend_status])
+        .invoke_handler(tauri::generate_handler![
+            backend_status,
+            licenses::license_documents,
+            licenses::read_license_document
+        ])
         .setup(|app| {
             // Registered in release too, deliberately. Gating this on
             // debug_assertions meant the installed build - the only one users
