@@ -42,13 +42,13 @@ service that starts and stops with the app.
 except to the provider you chose, with the key you supplied. No account, no
 subscription, no cloud render queue.
 
-## See one
+## See it
 
 <div align="center">
 
-[<img src="https://img.youtube.com/vi/S8d96ijZHu4/maxresdefault.jpg" alt="Bass Through the Cosmos — a short made with Clip Architect" width="560" />](https://youtu.be/S8d96ijZHu4)
-
-**[Bass Through the Cosmos](https://youtu.be/S8d96ijZHu4)** — made with Clip Architect.
+| [<img src="https://img.youtube.com/vi/ubOvgj6U__A/maxresdefault.jpg" alt="Clip Architect Desktop — the app" width="400" />](https://youtu.be/ubOvgj6U__A) | [<img src="https://img.youtube.com/vi/S8d96ijZHu4/maxresdefault.jpg" alt="Bass Through the Cosmos — a short made with Clip Architect" width="400" />](https://youtu.be/S8d96ijZHu4) |
+|:--:|:--:|
+| **[Clip Architect Desktop](https://youtu.be/ubOvgj6U__A)** — the app itself. | **[Bass Through the Cosmos](https://youtu.be/S8d96ijZHu4)** — a short made with it. |
 
 </div>
 
