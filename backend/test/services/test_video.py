@@ -531,6 +531,59 @@ class TestVideoService(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".mp3") as temp_bgm:
             self.assertEqual(vd.get_bgm_file(bgm_file=temp_bgm.name), "")
 
+    def test_random_bgm_never_draws_an_uploaded_track(self):
+        """
+        "random" 只从随应用发布的曲目中抽取。
+
+        上传曲目没有再分发授权，被抽中后会进入用户随后发布的视频；而且
+        一次为某个片段上传的文件会永久留在抽签池里，几周后突然成为另一个
+        视频的背景音乐。走完整调用链而不是打桩 bundled_bgm_files，因为
+        回归恰恰会发生在 get_bgm_file 选错列表的那一行。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            Path(builtin_dir, "bundled.mp3").write_bytes(b"builtin")
+            Path(uploaded_dir, "my-voice-over.mp3").write_bytes(b"uploaded")
+
+            with (
+                patch.object(
+                    vd.bgm_service.utils, "song_dir", return_value=builtin_dir
+                ),
+                patch.object(
+                    vd.bgm_service, "uploaded_bgm_dir", return_value=uploaded_dir
+                ),
+            ):
+                # 抽签是随机的，单次通过说明不了问题；池里只有两个文件时，
+                # 二十次都命中同一个已经足以排除"偶然没抽到上传曲目"。
+                drawn = {vd.get_bgm_file(bgm_type="random") for _ in range(20)}
+
+            self.assertEqual(
+                drawn, {os.path.realpath(os.path.join(builtin_dir, "bundled.mp3"))}
+            )
+
+    def test_random_bgm_falls_back_to_silence_when_nothing_ships(self):
+        """
+        内置目录为空时不能改抽上传曲目，也不能让 random.choice([]) 抛异常：
+        没有可用曲目就是没有背景音乐。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            Path(uploaded_dir, "my-voice-over.mp3").write_bytes(b"uploaded")
+
+            with (
+                patch.object(
+                    vd.bgm_service.utils, "song_dir", return_value=builtin_dir
+                ),
+                patch.object(
+                    vd.bgm_service, "uploaded_bgm_dir", return_value=uploaded_dir
+                ),
+            ):
+                self.assertEqual(vd.get_bgm_file(bgm_type="random"), "")
+
     def test_get_ffmpeg_binary_uses_configured_env_path(self):
         """配置中显式指定 ffmpeg 时，应优先使用该路径。"""
         with patch.dict(os.environ, {"IMAGEIO_FFMPEG_EXE": "/tmp/custom-ffmpeg"}, clear=True):
@@ -668,24 +721,39 @@ class TestVideoService(unittest.TestCase):
 
     def test_bundled_fonts_script_coverage(self):
         """
-        Pin which scripts the bundled subtitle fonts can actually render.
+        Pin what each bundled subtitle font can actually render.
 
         Upstream shipped Microsoft YaHei, STHeiti and UTM Kabel, which between
         them covered CJK, Cyrillic and Greek. All three are proprietary and
-        cannot be redistributed, so they were removed; the remaining faces are
-        SIL OFL and cover Latin, Vietnamese and Thai only.
+        cannot be redistributed, so they were removed. Noto Sans was added on
+        2026-08-30 for the Romanian letters Be Vietnam Pro lacks, and brought
+        Cyrillic and Greek back with it - which is why the expectation is now
+        per font rather than one rule for all of them.
 
         This is a user-visible limitation, not an implementation detail: a
-        Russian or Chinese subtitle silently renders as blank glyphs. The test
-        exists so that adding an OFL CJK/Cyrillic face (Noto Sans, for example)
-        is a deliberate act that updates this expectation, and so the coverage
-        cannot shrink further without someone noticing.
+        Chinese subtitle silently renders as blank glyphs. The test exists so
+        that adding or removing a face is a deliberate act that updates this
+        table and LICENSES-third-party.md with it.
         """
-        supported = "Sample subtitle line"
-        unsupported = {
+        latin = "Sample subtitle line"
+        samples = {
+            "romanian": "Știți că țara are munți",
+            "vietnamese": "Tôi vẫn luôn tin vào tương lai",
             "cyrillic": "Это текст для проверки",
             "greek": "Αυτό είναι κείμενο",
+            "thai": "นี่คือข้อความ",
             "chinese": "这是一个测试句子",
+        }
+        # What each bundled face covers, measured rather than assumed. Every
+        # font on disk has to appear here, and nothing may cover Chinese: that
+        # is the gap the licensing left behind.
+        coverage = {
+            "NotoSans-Bold.ttf": {"romanian", "vietnamese", "cyrillic", "greek"},
+            "NotoSans-Medium.ttf": {"romanian", "vietnamese", "cyrillic", "greek"},
+            "BeVietnamPro-Bold.ttf": {"vietnamese"},
+            "BeVietnamPro-Medium.ttf": {"vietnamese"},
+            "Charm-Regular.ttf": {"romanian", "vietnamese", "thai"},
+            "Charm-Bold.ttf": {"romanian", "vietnamese", "thai"},
         }
 
         font_names = [
@@ -694,21 +762,87 @@ class TestVideoService(unittest.TestCase):
             if name.lower().endswith((".ttf", ".ttc", ".otf"))
         ]
         self.assertTrue(font_names, "no subtitle fonts are bundled")
+        self.assertEqual(
+            sorted(font_names),
+            sorted(coverage),
+            "the bundled fonts changed; update this table, "
+            "LICENSES-third-party.md and licenses/THIRD-PARTY-NOTICES.md",
+        )
 
         for font_name in font_names:
             font_path = os.path.join(utils.font_dir(), font_name)
             with self.subTest(font=font_name):
                 self.assertTrue(
-                    vd.subtitle_font_supports_text(font_path, supported),
+                    vd.subtitle_font_supports_text(font_path, latin),
                     f"{font_name} cannot render basic Latin text",
                 )
-                for script, text in unsupported.items():
-                    self.assertFalse(
+                for script, text in samples.items():
+                    covered = script in coverage[font_name]
+                    self.assertEqual(
                         vd.subtitle_font_supports_text(font_path, text),
-                        f"{font_name} now covers {script}; update this test and "
-                        "LICENSES-third-party.md if a new font was added "
-                        "deliberately",
+                        covered,
+                        f"{font_name} no longer {'covers' if covered else 'lacks'} "
+                        f"{script}; update this table and the licence notes if the "
+                        "bundle changed deliberately",
                     )
+
+    def test_the_default_subtitle_font_draws_romanian_as_it_is_spelled(self):
+        """
+        The default face has to have the letters itself. Falling back to
+        `subtitle_text_for_font` is a repair for a font the user chose, not a
+        state the app should ship in - it costs the reader the difference
+        between s-comma and s-cedilla on every line.
+        """
+        default_font = vd.VideoParams(video_subject="anything").font_name
+        font_path = os.path.join(utils.font_dir(), default_font)
+        line = "Știți că țara are munți și șosele"
+
+        self.assertTrue(os.path.exists(font_path), f"{default_font} is not bundled")
+        self.assertTrue(vd.subtitle_font_supports_text(font_path, line))
+        self.assertEqual(vd.subtitle_text_for_font(line, font_path), line)
+
+    def test_a_letter_the_font_lacks_is_swapped_for_the_one_it_has(self):
+        """
+        Romanian s-comma and t-comma are missing from Be Vietnam Pro, which
+        draws only the cedilla forms that encoded the same two letters before
+        Unicode 3.0. A missing glyph is not drawn at all, so without the swap a
+        correctly spelled line arrives on screen with holes where two of its
+        letters should be. Noto Sans is the default now and has the letters, but
+        Be Vietnam Pro still ships and can still be chosen.
+        """
+        font_path = os.path.join(utils.font_dir(), "BeVietnamPro-Bold.ttf")
+        line = "Știți că țara are munți."
+
+        drawn = vd.subtitle_text_for_font(line, font_path)
+
+        self.assertEqual(drawn, "Ştiţi că ţara are munţi.")
+        self.assertTrue(vd.subtitle_font_supports_text(font_path, drawn))
+
+    def test_a_font_that_has_the_letter_keeps_the_spelling(self):
+        """The swap is a repair for one font's gap, not a rewrite of Romanian."""
+        font_path = os.path.join(utils.font_dir(), "Charm-Bold.ttf")
+        line = "Știți că țara are munți."
+
+        self.assertEqual(vd.subtitle_text_for_font(line, font_path), line)
+
+    def test_a_letter_with_no_equivalent_falls_back_to_its_base(self):
+        """
+        Misspelling a word is a small loss next to a gap where a letter should
+        be, and a reader puts the accent back.
+        """
+        font_path = os.path.join(utils.font_dir(), "BeVietnamPro-Bold.ttf")
+
+        self.assertEqual(vd.subtitle_text_for_font("ģimene", font_path), "gimene")
+
+    def test_an_uncovered_script_is_not_quietly_rewritten(self):
+        """
+        Nothing a Chinese character decomposes to is a Latin letter, so the
+        substitution has nothing to offer and must not invent one: an uncovered
+        script still fails visibly instead of saying something it never said.
+        """
+        font_path = os.path.join(utils.font_dir(), "BeVietnamPro-Bold.ttf")
+
+        self.assertEqual(vd.subtitle_text_for_font("这是一个测试", font_path), "这是一个测试")
 
     def test_format_ffmpeg_concat_path_normalizes_windows_path(self):
         """

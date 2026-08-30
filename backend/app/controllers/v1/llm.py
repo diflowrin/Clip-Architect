@@ -31,6 +31,7 @@ def generate_video_script(request: Request, body: VideoScriptRequest):
         video_script_prompt=body.video_script_prompt,
         custom_system_prompt=body.custom_system_prompt,
         target_seconds=body.video_duration,
+        video_aspect=body.video_aspect,
     )
     response = {"video_script": video_script}
     return utils.get_response(200, response)

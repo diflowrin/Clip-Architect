@@ -13,7 +13,7 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.services import task as tm
-from app.models.schema import MaterialInfo, VideoParams
+from app.models.schema import MaterialInfo, VideoAspect, VideoParams
 from app.services.state import MemoryState, RedisState
 from app.utils import utils
 
@@ -94,6 +94,26 @@ class TestTaskService(unittest.TestCase):
             # 用户选的片长只能在这里生效：文案一旦写完，旁白多长就已经定了。
             target_seconds=40,
             words_per_second=tm.llm.NARRATION_WORDS_PER_SECOND,
+            video_aspect=params.video_aspect,
+        )
+
+    def test_the_shape_of_the_video_reaches_the_script_prompt(self):
+        """
+        A vertical clip is watched in a feed the viewer can swipe away and a
+        widescreen one is not, and the aspect is the only thing on the form that
+        says which this is.
+        """
+        params = VideoParams(
+            video_subject="coffee",
+            video_script="",
+            video_aspect=VideoAspect.landscape,
+        )
+
+        with patch.object(tm.llm, "generate_script", return_value="script") as generate:
+            tm.generate_script("task-id", params)
+
+        self.assertEqual(
+            generate.call_args.kwargs["video_aspect"], VideoAspect.landscape
         )
 
     def test_script_word_budget_follows_the_voice_rate(self):
@@ -431,6 +451,149 @@ class TestTaskService(unittest.TestCase):
         self.assertEqual(len(final_paths), 1)
         self.assertEqual(warnings, [{"code": "sonilo_bgm_failed", "video_index": 1}])
         self.assertTrue(generate.call_args.kwargs["bgm_file_override"].endswith(".m4a"))
+
+    def _render_with_music(self, params, task_id, task_root, songs, draws):
+        """Run one render with a controlled bundled library, and report the mix."""
+        empty_uploads = os.path.join(task_root, "uploads")
+        os.makedirs(empty_uploads, exist_ok=True)
+        with (
+            patch.object(tm.utils, "task_dir", return_value=task_root),
+            patch.object(tm.bgm_service.utils, "song_dir", return_value=songs),
+            patch.object(tm.bgm_service, "uploaded_bgm_dir", return_value=empty_uploads),
+            patch.object(tm.video, "combine_videos"),
+            patch.object(tm.video, "get_bgm_file", side_effect=draws) as get_bgm_file,
+            patch.object(tm.video, "generate_video") as generate_video,
+            patch.object(tm.sm.state, "update_task"),
+        ):
+            tm.generate_final_videos(
+                task_id=task_id,
+                params=params,
+                downloaded_videos=["material.mp4"],
+                audio_file="audio.mp3",
+                subtitle_path="",
+                audio_duration=5,
+            )
+        return get_bgm_file, [
+            call.kwargs["params"] for call in generate_video.call_args_list
+        ]
+
+    def test_random_music_stays_the_same_when_a_task_is_rendered_again(self):
+        """
+        重新渲染同一个任务不能换掉背景音乐。
+
+        随机曲目原本在 generate_video 内部每次重抽，而"审阅后改一个地方再渲染
+        一次"正是这个界面存在的理由——用户没有碰音乐，配乐却整个换了。抽签结果
+        写进 script.json，下次渲染直接复用。
+
+        用假的 get_bgm_file 每次返回不同曲目，而不是依赖真随机：真随机重抽
+        也可能碰巧抽中同一首，那样的断言证明不了任何事。
+        """
+        with tempfile.TemporaryDirectory() as task_root:
+            songs = os.path.join(task_root, "songs")
+            os.makedirs(songs)
+            for name in ("one.mp3", "two.mp3"):
+                Path(songs, name).write_bytes(b"song")
+            draws = [os.path.join(songs, "one.mp3"), os.path.join(songs, "two.mp3")]
+            params = VideoParams(
+                video_subject="test", video_count=1, bgm_type="random", bgm_volume=0.2
+            )
+
+            first_draw, first_params = self._render_with_music(
+                params, "bgm-pin", task_root, songs, list(draws)
+            )
+            second_draw, second_params = self._render_with_music(
+                params, "bgm-pin", task_root, songs, list(draws)
+            )
+
+        self.assertEqual(first_draw.call_count, 1)
+        # The second render must not reach for the dice at all.
+        self.assertEqual(second_draw.call_count, 0)
+        self.assertEqual(first_params[0].bgm_type, "file")
+        self.assertEqual(
+            os.path.basename(first_params[0].bgm_file or ""), "one.mp3"
+        )
+        self.assertEqual(second_params[0].bgm_file, first_params[0].bgm_file)
+
+    def test_choosing_a_track_and_going_back_to_random_draws_again(self):
+        """
+        表单换了音乐设置，钉住的曲目就该作废。
+
+        中间那次渲染指定了具体曲目，会把 script.json 里的记录覆盖成
+        "type=file"；再切回 Random 时配方不再匹配，因此必须重新抽，而不是
+        复活这个任务上一次抽到的那首。
+        """
+        with tempfile.TemporaryDirectory() as task_root:
+            songs = os.path.join(task_root, "songs")
+            os.makedirs(songs)
+            for name in ("one.mp3", "two.mp3", "chosen.mp3"):
+                Path(songs, name).write_bytes(b"song")
+            draws = [os.path.join(songs, "one.mp3"), os.path.join(songs, "two.mp3")]
+
+            random_params = VideoParams(
+                video_subject="test", video_count=1, bgm_type="random", bgm_volume=0.2
+            )
+            named_params = VideoParams(
+                video_subject="test",
+                video_count=1,
+                bgm_type="file",
+                bgm_file="chosen.mp3",
+                bgm_volume=0.2,
+            )
+
+            self._render_with_music(
+                random_params, "bgm-reroll", task_root, songs, list(draws)
+            )
+            _, named_render = self._render_with_music(
+                named_params, "bgm-reroll", task_root, songs, list(draws)
+            )
+            second_draw, back_to_random = self._render_with_music(
+                random_params, "bgm-reroll", task_root, songs, list(draws)
+            )
+
+        # A named track is passed through untouched - it needs no pin.
+        self.assertEqual(named_render[0].bgm_type, "file")
+        self.assertEqual(named_render[0].bgm_file, "chosen.mp3")
+        self.assertEqual(second_draw.call_count, 1)
+        self.assertEqual(
+            os.path.basename(back_to_random[0].bgm_file or ""), "one.mp3"
+        )
+
+    def test_each_video_of_a_batch_keeps_its_own_track(self):
+        """
+        video_count 大于 1 时每条视频本来就各抽各的，钉住不能把它们并成一首。
+        重新渲染时也要按顺序各自复用。
+        """
+        with tempfile.TemporaryDirectory() as task_root:
+            songs = os.path.join(task_root, "songs")
+            os.makedirs(songs)
+            for name in ("one.mp3", "two.mp3", "three.mp3"):
+                Path(songs, name).write_bytes(b"song")
+            draws = [
+                os.path.join(songs, "one.mp3"),
+                os.path.join(songs, "two.mp3"),
+                os.path.join(songs, "three.mp3"),
+            ]
+            params = VideoParams(
+                video_subject="test", video_count=2, bgm_type="random", bgm_volume=0.2
+            )
+
+            first_draw, first_params = self._render_with_music(
+                params, "bgm-batch", task_root, songs, list(draws)
+            )
+            second_draw, second_params = self._render_with_music(
+                params, "bgm-batch", task_root, songs, list(draws)
+            )
+
+        self.assertEqual(first_draw.call_count, 2)
+        self.assertEqual(
+            [os.path.basename(entry.bgm_file or "") for entry in first_params],
+            ["one.mp3", "two.mp3"],
+        )
+        self.assertEqual(second_draw.call_count, 0)
+        self.assertEqual(
+            [entry.bgm_file for entry in second_params],
+            [entry.bgm_file for entry in first_params],
+        )
 
     def test_run_pipeline_fails_fast_when_ffmpeg_is_not_ready(self):
         """完整视频流水线必须在 LLM/TTS/素材服务之前先确认 FFmpeg 可用。"""

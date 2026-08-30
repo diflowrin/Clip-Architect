@@ -169,6 +169,19 @@ export interface ReopenedClips {
   script: string;
 }
 
+/** One stock clip fetched by keyword while reviewing, ready to take the place
+ *  of a clip in the list. `material` is its playback URI, or null when the
+ *  backend cannot stream it. */
+export interface MaterialSearchResult {
+  material_path: string;
+  material: string | null;
+  /** The keyword this clip came back for, trimmed the way the search ran. */
+  search_term: string;
+  /** Which stock provider answered. Not always the one the form asked for: a
+   *  project made from local files still searches a stock source. */
+  source: string;
+}
+
 export interface TaskListPage {
   tasks: TaskStatus[];
   total: number;
@@ -180,6 +193,15 @@ export interface FileEntry {
   name: string;
   size: number;
   file: string;
+}
+
+/** A background music track. `bundled` marks one that ships with the app, and
+ *  only those take part in the "Random" draw — every bundled track has a
+ *  redistribution grant recorded in LICENSES-third-party.md, and an uploaded
+ *  one has none. Uploads stay pickable by name; they are simply never picked
+ *  for you. */
+export interface BgmFile extends FileEntry {
+  bundled: boolean;
 }
 
 /** A stock clip in the shared download cache. `modified` is a Unix timestamp
@@ -427,6 +449,9 @@ export class BackendApi {
     /** Seconds the script should take to read aloud. The backend turns it
      *  into the word budget it asks the model for. */
     video_duration?: number;
+    /** The shape of the finished video. A vertical clip is written differently
+     *  from a widescreen one, so the button has to send it too. */
+    video_aspect?: string;
     video_script_prompt?: string;
     custom_system_prompt?: string;
   }): Promise<{ video_script: string }> {
@@ -490,9 +515,31 @@ export class BackendApi {
     });
   }
 
+  /** Fetch one stock clip for a keyword, to swap into a reviewed clip list.
+   *
+   *  `exclude` is what the timeline already holds: the backend skips those
+   *  candidates, so asking again for the same keyword walks on to the next
+   *  clip instead of handing back the one already on screen. Nothing about
+   *  the task changes - the clip only reaches the video if it is rendered. */
+  searchMaterial(
+    taskId: string,
+    body: {
+      search_term: string;
+      video_source?: string;
+      video_aspect?: VideoAspect;
+      video_clip_duration?: number;
+      exclude?: string[];
+    },
+  ): Promise<MaterialSearchResult> {
+    return this.request(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/material_search`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  }
+
   // --- assets ---
 
-  listBgm(): Promise<{ files: FileEntry[] }> {
+  listBgm(): Promise<{ files: BgmFile[] }> {
     return this.request('/api/v1/musics');
   }
 
@@ -553,6 +600,14 @@ export class BackendApi {
     const form = new FormData();
     form.append('file', file);
     return this.request('/api/v1/musics', { method: 'POST', body: form }, false);
+  }
+
+  /** Remove an uploaded track. Only uploads can be deleted — the bundled
+   *  library is part of the installed package. */
+  deleteBgm(fileName: string): Promise<void> {
+    return this.request(`/api/v1/musics/${encodeURIComponent(fileName)}`, {
+      method: 'DELETE',
+    });
   }
 
   // --- saved projects ---

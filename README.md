@@ -66,7 +66,9 @@ subscription, no cloud render queue.
 - **Background music** from the 8 bundled tracks or your own uploads.
 - **Review before render** — an optional pass that downloads the clips and lets
   you reorder, remove or replace any of them before spending the minutes and
-  the provider quota. Finished tasks can be reopened for another pass.
+  the provider quota. A clip can be replaced with a file of your own or with a
+  fresh one fetched by keyword; asking again offers a clip you have not been
+  shown yet, falling through to another stock provider when one runs dry. Finished tasks can be reopened for another pass.
 - **Voice-over first** — record and listen to the narration on its own, with its
   duration, before committing to a full render.
 - **Saved projects and a library** of past renders, plus a reusable cache of
@@ -210,6 +212,7 @@ port serves the generated OpenAPI UI during development.
 | `POST` | `/subtitle` | Generate subtitles only |
 | `POST` | `/tasks/{id}/render` | Render a reviewed task from its approved clips |
 | `POST` | `/tasks/{id}/reopen` | Reopen a finished task's clips for another pass |
+| `POST` | `/tasks/{id}/material_search` | Fetch one stock clip by keyword, to swap into a reviewed list |
 | `GET` | `/tasks` | Paginated task list |
 | `GET`/`DELETE` | `/tasks/{id}` | Task state and progress / delete it and its output |
 | `POST` | `/scripts` | Generate a script with the configured LLM |
@@ -244,8 +247,9 @@ install with no accounts — needs in order to see the app do anything.
 
 - **Windows only.** The shell, the MSIX packaging and the `h264_mf` encoder are
   all Windows-specific.
-- **No CJK, Cyrillic or Greek subtitle font ships.** Only Latin, Vietnamese and
-  Thai are covered; other scripts render as blank glyphs rather than failing.
+- **No CJK subtitle font ships.** Latin, Vietnamese, Cyrillic, Greek and Thai
+  are covered; Chinese, Japanese and Korean render as blank glyphs rather than
+  failing.
 - **H.264 is Constrained Baseline**, because it is encoded through Windows Media
   Foundation rather than a bundled encoder. Files are larger than libx264 would
   produce. This is a patent decision, not an oversight; HEVC is never emitted.
@@ -326,5 +330,5 @@ crediting the clip in it — but the terms are theirs to change, and they are
 worth reading before you publish at scale. Crediting a creator you liked costs
 nothing and is the reason the libraries stay free.
 
-Prefer to credit nobody? The **local footage + Edge TTS** path needs no stock
+The **local footage + Edge TTS** path needs no stock
 provider and no account at all.

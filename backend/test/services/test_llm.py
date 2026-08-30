@@ -151,6 +151,96 @@ class TestScriptPromptOptions(unittest.TestCase):
         self.assertNotIn("spoken length", prompt)
         self.assertNotIn("total length", prompt)
 
+    def test_the_requested_language_wins_over_the_language_of_the_subject(self):
+        """
+        The default rules used to say "respond in the same language as the video
+        subject", which contradicted the language the user picked as soon as the
+        two differed - and a model given two instructions picks one. The runtime
+        block now says which wins, and says it where a custom system prompt
+        cannot take it away.
+        """
+        prompt = llm.build_script_prompt(
+            video_subject="espresso at home",
+            language="Romanian",
+            paragraph_number=1,
+        )
+
+        self.assertIn("- language: Romanian", prompt)
+        self.assertIn("whatever language the video subject is written in", prompt)
+        self.assertNotIn("respond in the same language as the video subject", prompt)
+
+    def test_the_prompt_asks_for_the_diacritics_of_that_language(self):
+        """
+        Models write Romanian, Turkish and Czech without their diacritics about
+        as often as the internet does. It is not a typo when the narration is
+        read aloud: TTS takes "tara" and "țara" for two different words and
+        pronounces them that way.
+        """
+        for language in ("Romanian", ""):
+            with self.subTest(language=language):
+                prompt = llm.build_script_prompt(
+                    video_subject="coffee",
+                    language=language,
+                    paragraph_number=1,
+                )
+                self.assertIn("including every diacritic", prompt)
+
+    def test_the_language_is_stated_even_when_the_caller_sent_none(self):
+        """
+        Detection is the default, not the absence of an instruction: with the
+        rule gone from the constraints, nothing else would tell the model what
+        to write in.
+        """
+        prompt = llm.build_script_prompt(video_subject="coffee", paragraph_number=1)
+
+        self.assertIn(
+            "- language: the language the video subject is written in.", prompt
+        )
+
+    def test_a_multi_paragraph_budget_is_split_per_paragraph(self):
+        """
+        A total is a number the model has to divide as it writes. When it
+        misses, the trim takes the difference out of the last paragraph, which
+        is the conclusion.
+        """
+        prompt = llm.build_script_prompt(
+            video_subject="coffee",
+            paragraph_number=4,
+            target_seconds=80,
+        )
+
+        self.assertIn("- total length: about 200 words", prompt)
+        self.assertIn("about 50 words per paragraph", prompt)
+
+    def test_a_single_paragraph_is_not_told_its_own_total_twice(self):
+        prompt = llm.build_script_prompt(
+            video_subject="coffee",
+            paragraph_number=1,
+            target_seconds=20,
+        )
+
+        self.assertNotIn("per paragraph", prompt)
+
+    def test_the_shape_of_the_video_reaches_the_prompt(self):
+        """
+        The aspect is the only thing on the form that says where the video will
+        be watched, and a phone feed needs a different first sentence than a
+        widescreen player.
+        """
+        prompt = llm.build_script_prompt(
+            video_subject="coffee", paragraph_number=1, video_aspect="9:16"
+        )
+
+        self.assertIn("- format: a vertical short-form video", prompt)
+
+    def test_an_unknown_shape_adds_no_line_rather_than_a_guessed_one(self):
+        for aspect in ("", None, "4:3"):
+            with self.subTest(aspect=aspect):
+                prompt = llm.build_script_prompt(
+                    video_subject="coffee", paragraph_number=1, video_aspect=aspect
+                )
+                self.assertNotIn("- format:", prompt)
+
     def test_a_faster_voice_gets_a_larger_budget(self):
         """同样 20 秒，语速更快就能读完更多词。"""
         self.assertEqual(llm.script_word_budget(20), 50)
@@ -192,6 +282,25 @@ class TestScriptPromptOptions(unittest.TestCase):
             )
 
         self.assertEqual(result, script)
+
+    def test_an_aside_in_brackets_does_not_take_the_sentence_with_it(self):
+        """
+        The markdown cleanup used to be greedy, so on a line with two asides it
+        deleted everything from the first bracket to the last: a full sentence
+        left the pipeline as three words, and nothing downstream could tell that
+        anything had gone missing.
+        """
+        script = (
+            "Espresso (a strong coffee) needs pressure and a fine grind "
+            "(about 250 microns) to work."
+        )
+
+        with patch.object(llm, "_generate_response", return_value=script):
+            result = llm.generate_script(video_subject="espresso", paragraph_number=1)
+
+        self.assertEqual(
+            result, "Espresso needs pressure and a fine grind to work."
+        )
 
     def test_generate_script_reuses_submitted_config_snapshot(self):
         """WebUI 后台任务结束后应用新配置，不能改变正在重试的模型请求。"""

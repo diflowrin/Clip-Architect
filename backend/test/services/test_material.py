@@ -2007,5 +2007,269 @@ class TestMaterialDownloadProgress(unittest.TestCase):
         self.assertTrue(result, "a failing callback must not lose downloaded videos")
 
 
+class TestKeywordReplacementSearch(unittest.TestCase):
+    """
+    审阅界面按关键词换片段：必须跳过时间线已有的候选，并且只下载一段。
+
+    重复点击"再找一个"要给出不同的结果，否则这个功能等于没有；而搜索结果
+    有 24 小时缓存，所以"下一个"只能由调用方传来的排除列表决定。
+    """
+
+    def _items(self, count=3):
+        return [
+            material.MaterialInfo(
+                provider="pexels",
+                url=f"https://v.example/{index}.mp4",
+                duration=10,
+                source_info={"provider": "pexels", "asset_id": str(index)},
+            )
+            for index in range(1, count + 1)
+        ]
+
+    def _search(self, *, items, exclude=(), source="pexels", save_dir="/tmp/task"):
+        saved = []
+
+        def fake_save(video_url, save_dir=""):
+            path = os.path.join(save_dir, material.downloaded_file_name(video_url))
+            saved.append(path)
+            return path
+
+        with (
+            patch.object(
+                material, "_search_videos_with_cache", return_value=list(items)
+            ) as search,
+            patch.object(material, "save_video", side_effect=fake_save),
+            patch.object(material, "_append_material_source") as append_source,
+        ):
+            result = material.search_replacement_video(
+                task_id="task-123",
+                search_term="city skyline",
+                source=source,
+                exclude_paths=list(exclude),
+                save_dir=save_dir,
+            )
+        return result, saved, search, append_source
+
+    def test_returns_the_first_candidate_and_downloads_only_it(self):
+        """换一段素材只该产生一次下载，不能顺带把整批候选都取回来。"""
+        items = self._items()
+        result, saved, _search, _append = self._search(items=items)
+
+        self.assertEqual(
+            result.path,
+            os.path.join("/tmp/task", material.downloaded_file_name(items[0].url)),
+        )
+        self.assertEqual(result.provider, "pexels")
+        self.assertEqual(len(saved), 1)
+
+    def test_skips_clips_already_in_the_timeline(self):
+        """
+        已经在时间线上的片段必须在下载之前就跳过。
+
+        排除是按 save_video 会用的文件名做的，所以重复候选不会先花一次
+        下载再被发现——那既浪费带宽，也会把用户的配额用在已有的素材上。
+        """
+        items = self._items()
+        taken = os.path.join(
+            "/tmp/task", material.downloaded_file_name(items[0].url)
+        )
+        result, saved, _search, _append = self._search(items=items, exclude=[taken])
+
+        self.assertEqual(
+            result.path,
+            os.path.join("/tmp/task", material.downloaded_file_name(items[1].url)),
+        )
+        self.assertEqual(saved, [result.path], "the excluded candidate was downloaded")
+
+    def test_reports_nothing_when_every_candidate_is_already_used(self):
+        """候选全部用过时返回空串，由调用方提示换个关键词，而不是重复给同一段。"""
+        items = self._items(2)
+        taken = [
+            os.path.join("/tmp/task", material.downloaded_file_name(item.url))
+            for item in items
+        ]
+        result, saved, _search, _append = self._search(items=items, exclude=taken)
+
+        self.assertEqual(result.path, "")
+        self.assertEqual(saved, [])
+
+    def test_blank_keyword_never_reaches_the_provider(self):
+        """空关键词不该产生一次远端搜索。"""
+        with patch.object(material, "_search_videos_with_cache") as search:
+            result = material.search_replacement_video(
+                task_id="task-123", search_term="   ", save_dir="/tmp/task"
+            )
+
+        self.assertEqual(result.path, "")
+        search.assert_not_called()
+
+    def test_local_and_unknown_sources_fall_back_to_a_stock_provider(self):
+        """
+        本地素材项目没有可搜索的目录，但"在自己的片段中间插一段库存素材"
+        是完全正常的诉求，所以这里回退到默认库存源而不是直接失败。
+        """
+        items = self._items(1)
+        _result, _saved, search, _append = self._search(items=items, source="local")
+
+        self.assertEqual(
+            search.call_args.kwargs["provider"], material.DEFAULT_SEARCHABLE_SOURCE
+        )
+
+    def test_an_exhausted_provider_falls_through_to_another_one(self):
+        """
+        一个关键词在单一供应商上很快就见底：搜索结果缓存一天，方向筛选又会
+        再砍一批。见底就报"没有了"会让"换一个"两三次之后就失效，所以要顺延
+        到其它已配置 Key 的库存源。
+        """
+        fresh = material.MaterialInfo(
+            provider="pixabay",
+            url="https://v.example/fresh.mp4",
+            duration=10,
+            source_info={"provider": "pixabay"},
+        )
+        used = self._items(1)
+        taken = [
+            os.path.join("/tmp/task", material.downloaded_file_name(used[0].url))
+        ]
+
+        def by_provider(**kwargs):
+            return used if kwargs["provider"] == "pexels" else [fresh]
+
+        with (
+            patch.object(
+                material, "_search_videos_with_cache", side_effect=by_provider
+            ),
+            patch.object(
+                material,
+                "save_video",
+                side_effect=lambda video_url, save_dir="": os.path.join(
+                    save_dir, material.downloaded_file_name(video_url)
+                ),
+            ),
+            patch.object(material, "_append_material_source"),
+        ):
+            result = material.search_replacement_video(
+                task_id="task-123",
+                search_term="city skyline",
+                source="pexels",
+                exclude_paths=taken,
+                save_dir="/tmp/task",
+            )
+
+        self.assertEqual(
+            result.path,
+            os.path.join("/tmp/task", material.downloaded_file_name(fresh.url)),
+        )
+        self.assertEqual(
+            result.provider, "pixabay", "the answer must name who supplied it"
+        )
+
+    def test_a_fallback_without_a_key_is_skipped_in_silence(self):
+        """
+        备用源没配 Key 不是用户的问题——他们选的是另一个源。这里必须继续往下
+        找，而不是把一条关于他们从没选过的服务的报错丢到界面上。
+        """
+        fresh = material.MaterialInfo(
+            provider="coverr", url="https://v.example/c.mp4", duration=10
+        )
+
+        def by_provider(**kwargs):
+            if kwargs["provider"] == "pexels":
+                return []
+            if kwargs["provider"] == "pixabay":
+                raise ValueError("pixabay_api_keys is not set")
+            return [fresh]
+
+        with (
+            patch.object(
+                material, "_search_videos_with_cache", side_effect=by_provider
+            ),
+            patch.object(
+                material,
+                "save_video",
+                side_effect=lambda video_url, save_dir="": os.path.join(
+                    save_dir, material.downloaded_file_name(video_url)
+                ),
+            ),
+            patch.object(material, "_append_material_source"),
+        ):
+            result = material.search_replacement_video(
+                task_id="task-123",
+                search_term="city skyline",
+                source="pexels",
+                save_dir="/tmp/task",
+            )
+
+        self.assertEqual(result.provider, "coverr")
+
+    def test_the_requested_provider_still_reports_a_missing_key(self):
+        """
+        用户选定的源缺 Key 必须说出来：那是他们能修的，静默顺延会让"为什么
+        Pexels 的 Key 白填了"变成一个查不出来的问题。
+        """
+        with patch.object(
+            material,
+            "_search_videos_with_cache",
+            side_effect=ValueError("pexels_api_keys is not set"),
+        ):
+            with self.assertRaises(ValueError):
+                material.search_replacement_video(
+                    task_id="task-123",
+                    search_term="city skyline",
+                    source="pexels",
+                    save_dir="/tmp/task",
+                )
+
+    def test_source_record_is_appended_not_replaced(self):
+        """
+        单段替换必须保留其它片段的来源记录。整体替换会把它们抹掉，而来源
+        信息是素材授权追溯的依据。
+        """
+        _result, _saved, _search, append_source = self._search(items=self._items(1))
+
+        append_source.assert_called_once()
+        self.assertEqual(append_source.call_args.args[0], "task-123")
+
+
+class TestAppendMaterialSource(unittest.TestCase):
+    """来源记录是追加写入：单段替换不能覆盖整批素材的授权信息。"""
+
+    def test_existing_records_survive_a_single_replacement(self):
+        existing = [{"provider": "pexels", "file": "vid-1.mp4"}]
+        added = {"provider": "pexels", "file": "vid-2.mp4"}
+
+        with (
+            patch.object(
+                material.task_artifacts,
+                "read_script_data",
+                return_value={"material_sources": list(existing)},
+            ),
+            patch.object(
+                material.task_artifacts, "patch_script_data", return_value=True
+            ) as patch_data,
+        ):
+            material._append_material_source("task-123", added)
+
+        self.assertEqual(
+            patch_data.call_args.kwargs["material_sources"], existing + [added]
+        )
+
+    def test_a_missing_manifest_still_records_the_new_clip(self):
+        """任务清单不存在时也不能抛异常：片段已经下载好了。"""
+        with (
+            patch.object(
+                material.task_artifacts, "read_script_data", return_value=None
+            ),
+            patch.object(
+                material.task_artifacts, "patch_script_data", return_value=False
+            ) as patch_data,
+        ):
+            material._append_material_source("task-123", {"provider": "pexels"})
+
+        self.assertEqual(
+            patch_data.call_args.kwargs["material_sources"], [{"provider": "pexels"}]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

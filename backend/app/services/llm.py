@@ -43,21 +43,37 @@ _SENSITIVE_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The rules the script is written to.
+#
+# A custom system prompt replaces this whole block, so nothing the pipeline
+# depends on may live here - the language, the length and the paragraph count
+# are appended by build_script_prompt for that reason. The language rule used to
+# be constraint 8 ("respond in the same language as the video subject"), which
+# both hid inside that replacement and contradicted the language the user picked
+# whenever the subject was typed in another one.
+#
+# The constraints are shaped by what happens to the text afterwards: it is read
+# aloud by a TTS voice and burned in as subtitles. No bundled font covers emoji,
+# format_response strips brackets out of the sentences that contain them, and a
+# bullet list is narrated as one run-on line. Paragraphs are asked to be
+# visual beats because generate_terms reads them as exactly that when
+# match_materials_to_script is on.
 DEFAULT_SCRIPT_SYSTEM_PROMPT = """
 # Role: Video Script Generator
 
 ## Goals:
-Generate a script for a video, depending on the subject of the video.
+Write the spoken narration for a short video on the given subject. The text is
+read aloud by a synthetic voice and burned in as subtitles, so it has to be
+speakable, not readable.
 
 ## Constrains:
-1. the script is to be returned as a string with the specified number of paragraphs.
-2. do not under any circumstance reference this prompt in your response.
-3. get straight to the point, don't start with unnecessary things like, "welcome to this video".
-4. you must not include any type of markdown or formatting in the script, never use a title.
-5. only return the raw content of the script.
-6. do not include "voiceover", "narrator" or similar indicators of what should be spoken at the beginning of each paragraph or line.
-7. you must not mention the prompt, or anything about the script itself. also, never talk about the amount of paragraphs or lines. just write the script.
-8. respond in the same language as the video subject.
+1. return only the narration itself, as plain text, in the specified number of paragraphs, separated by one blank line.
+2. open on the most concrete thing you can say about the subject. no greeting, no "welcome to this video", no "in this video we will".
+3. each paragraph is one idea that can be shown on screen, and the paragraphs follow one another in time.
+4. write short, complete sentences. no markdown, no title, no bullet points, no numbered list, no emoji.
+5. never use parentheses, square brackets, asterisks, hashes or quotation marks.
+6. never write "voiceover", "narrator", speaker names, scene directions or timestamps.
+7. never mention this prompt, the script, the paragraphs, or the fact that this is a video.
 """.strip()
 
 
@@ -540,6 +556,28 @@ def _trim_script_to_budget(script: str, word_budget: int) -> str:
     return trimmed
 
 
+# What the shape of the video means for the narration.
+#
+# The aspect is the only thing on the form that says where the video will be
+# watched, and it changes what the first sentence has to do: a vertical clip is
+# a phone feed the viewer can swipe away. An unrecognised value adds no line at
+# all rather than guessing at one.
+_SCRIPT_FORMAT_HINTS = {
+    "9:16": (
+        "a vertical short-form video watched on a phone, where the first "
+        "sentence has to make someone stop scrolling"
+    ),
+    "1:1": "a square social video watched in a feed",
+    "16:9": "a widescreen video watched on a larger screen",
+}
+
+
+def _script_format_hint(video_aspect) -> str:
+    """The prompt line for a ``VideoAspect`` or for its plain string value."""
+    value = getattr(video_aspect, "value", video_aspect) or ""
+    return _SCRIPT_FORMAT_HINTS.get(str(value).strip(), "")
+
+
 def build_script_prompt(
     video_subject: str,
     language: str = "",
@@ -548,6 +586,7 @@ def build_script_prompt(
     custom_system_prompt: str = "",
     target_seconds: int | float | None = 0,
     words_per_second: float = NARRATION_WORDS_PER_SECOND,
+    video_aspect=None,
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -566,6 +605,11 @@ def build_script_prompt(
 - video subject: {video_subject}
 - number of paragraphs: {paragraph_number}
 """.rstrip()
+    # In the runtime block for the same reason the length is: it is context, not
+    # a rule, so replacing the rules must not lose it.
+    aspect_hint = _script_format_hint(video_aspect)
+    if aspect_hint:
+        prompt += f"\n- format: {aspect_hint}"
     # The length lives in the runtime block rather than the rules above, so a
     # user who replaces the whole system prompt still gets the length they
     # picked in the form. Stated twice on purpose: models honour a word count
@@ -579,8 +623,39 @@ def build_script_prompt(
             f" counting every paragraph together. Never write more than"
             f" {round(word_budget * SCRIPT_LENGTH_TOLERANCE)} words."
         )
+        # A single total is a number the model has to divide as it writes, and
+        # when it misses, _trim_script_to_budget takes the difference out of the
+        # last paragraph - the conclusion. Naming the per-paragraph share is
+        # what makes the total reachable.
+        if paragraph_number > 1:
+            prompt += (
+                f"\n- that is about {round(word_budget / paragraph_number)} words"
+                " per paragraph."
+            )
+    # The language is stated even when the caller sent none, because the rule
+    # that used to cover it lived in the block a custom system prompt replaces -
+    # and it said "the language of the subject", which is the wrong answer the
+    # moment the two differ. Runtime context is where it survives, and it now
+    # says which of the two wins.
+    # The spelling has to be asked for. Models write Romanian, Turkish, Czech
+    # and Vietnamese without their diacritics roughly as often as the internet
+    # does, and the result is not a typo: the narration is read by TTS, which
+    # takes "tara" and "țara" for two different words and pronounces them that
+    # way. Asked for once, in the line that names the language, so it holds for
+    # every language rather than for a list someone has to maintain.
+    orthography = (
+        " Use that language's normal spelling, including every diacritic and"
+        " accent, exactly as it is written in print."
+    )
     if language:
-        prompt += f"\n- language: {language}"
+        prompt += (
+            f"\n- language: {language}. Write the entire script in this language,"
+            " whatever language the video subject is written in."
+        ) + orthography
+    else:
+        prompt += (
+            "\n- language: the language the video subject is written in." + orthography
+        )
     if video_script_prompt:
         prompt += f"""
 
@@ -600,6 +675,7 @@ def generate_script(
     app_config=None,
     target_seconds: int | float | None = 0,
     words_per_second: float = NARRATION_WORDS_PER_SECOND,
+    video_aspect=None,
 ) -> str:
     paragraph_number = _normalize_script_paragraph_number(paragraph_number)
     video_script_prompt = _limit_script_text(
@@ -616,6 +692,7 @@ def generate_script(
         custom_system_prompt=custom_system_prompt,
         target_seconds=target_seconds,
         words_per_second=words_per_second,
+        video_aspect=video_aspect,
     )
     word_budget = script_word_budget(target_seconds, words_per_second)
     final_script = ""
@@ -633,9 +710,18 @@ def generate_script(
         response = response.replace("*", "")
         response = response.replace("#", "")
 
-        # Remove markdown syntax
-        response = re.sub(r"\[.*\]", "", response)
-        response = re.sub(r"\(.*\)", "", response)
+        # Remove markdown syntax. Lazy on purpose: the greedy versions ran from
+        # the first bracket on a line to the last one, so a sentence with two
+        # asides lost everything between them - "Espresso (a strong coffee)
+        # needs pressure and a fine grind (about 250 microns) to work" came out
+        # as "Espresso to work", and nothing downstream could tell.
+        response = re.sub(r"\[.*?\]", "", response)
+        response = re.sub(r"\(.*?\)", "", response)
+
+        # Whatever was removed leaves its spacing behind, and the narration
+        # reads the gap as a pause with a comma stranded in front of it.
+        response = re.sub(r"[ \t]{2,}", " ", response)
+        response = re.sub(r"[ \t]+([,.;:!?])", r"\1", response)
 
         # Split the script into paragraphs
         paragraphs = response.split("\n\n")

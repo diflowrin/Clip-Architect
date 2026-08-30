@@ -33,7 +33,7 @@ travel **with the binary**, so the `licenses/` folder is declared in
 | `THIRD-PARTY-NOTICES.md` | maintained by hand | the user-facing notice, and the GPL and LGPL source offers |
 | `FFMPEG-LICENSE.md`, `FFMPEG-BUILD.txt` | FFmpeg `n9.0`; the second written by `scripts/fetch-ffmpeg.ps1` | the bundled FFmpeg and everything compiled into it |
 | `LGPL-3.0.txt`, `LGPL-2.1.txt` | gnu.org | FFmpeg and edge-tts |
-| `OFL-1.1-BeVietnamPro.txt`, `OFL-1.1-Charm.txt` | each font's own repository | the subtitle fonts |
+| `OFL-1.1-NotoSans.txt`, `OFL-1.1-BeVietnamPro.txt`, `OFL-1.1-Charm.txt` | each font's own repository | the subtitle fonts |
 | `LICENSES-python.txt` | `scripts/generate-python-licenses.ps1` | all 96 Python packages in the frozen backend |
 
 `build-msix.ps1` refuses to pack a staging folder that is missing any of them.
@@ -75,7 +75,10 @@ Apache-2.0 is compatible with GPLv3 (though not GPLv2).
   HTTP, replacing the in-process configuration editing the Streamlit UI did.
 - `app/router.py` — registers the settings router.
 - `app/models/schema.py`, `app/services/video.py` — default subtitle font
-  changed from `STHeitiMedium.ttc` to `BeVietnamPro-Bold.ttf` (see below).
+  changed from `STHeitiMedium.ttc` to `NotoSans-Bold.ttf` (see below).
+- `app/services/video.py` — `subtitle_text_for_font`, new; substitutes a letter
+  the chosen font cannot draw for one it can, so a gap in a font shows as a
+  different spelling rather than as a hole in the line.
 - `app/services/video.py` — default video encoder changed from `libx264` to
   `h264_mf`, and the codec fallback reworked into an ordered chain. Upstream
   fell back to a hard-coded `libx264` from every failure path, which silently
@@ -95,14 +98,16 @@ Apache-2.0 is compatible with GPLv3 (though not GPLv2).
 
 ## Bundled fonts — `backend/resource/fonts/`
 
-Both families are licensed under the
+All three families are licensed under the
 [SIL Open Font License 1.1](https://scripts.sil.org/OFL), which explicitly
 permits bundling inside a commercial application — provided the licence, with
 the font's own copyright line, is distributed alongside it. Each font's `OFL.txt`
-ships as `licenses/OFL-1.1-BeVietnamPro.txt` and `licenses/OFL-1.1-Charm.txt`.
+ships as `licenses/OFL-1.1-NotoSans.txt`, `licenses/OFL-1.1-BeVietnamPro.txt`
+and `licenses/OFL-1.1-Charm.txt`.
 
 | Font | Copyright | License |
 |---|---|---|
+| Noto Sans (Bold, Medium) | © 2022 The Noto Project Authors | OFL-1.1 |
 | Be Vietnam Pro (Bold, Medium) | © 2021 The Be Vietnam Pro Project Authors | OFL-1.1 |
 | Charm (Regular, Bold) | © 2018 The Charm Project Authors | OFL-1.1 |
 
@@ -118,7 +123,8 @@ were moved to `packaging/removed-fonts/` and are excluded from the build:
 | UTM Kabel KT | Thien Minh Co. Ltd; terms unclear and not verifiable. |
 
 STHeitiMedium.ttc was upstream's **default** subtitle font, so the default was
-changed to Be Vietnam Pro Bold.
+changed to Be Vietnam Pro Bold, and then to Noto Sans Bold when Be Vietnam Pro
+turned out to be missing letters Romanian needs (below).
 
 ### Script coverage after the removals
 
@@ -126,23 +132,30 @@ Measured against the bundled fonts, not assumed:
 
 | Script | Covered | By |
 |---|---|---|
-| Latin | yes | Be Vietnam Pro, Charm |
-| Vietnamese | yes | Be Vietnam Pro, Charm |
+| Latin | yes | Noto Sans, Be Vietnam Pro, Charm |
+| Vietnamese | yes | Noto Sans, Be Vietnam Pro, Charm |
+| Cyrillic | yes | Noto Sans |
+| Greek | yes | Noto Sans |
 | Thai | yes | Charm |
-| **Cyrillic** | **no** | — |
-| **Greek** | **no** | — |
 | **CJK** | **no** | — |
 
-This is wider than it first appears: Russian, Ukrainian, Bulgarian, Serbian and
-Greek subtitles are affected as well as Chinese, Japanese and Korean. A subtitle
-in an uncovered script renders as blank or tofu glyphs rather than failing
-loudly, because `subtitle_font_supports_text` fails open by design.
+Chinese, Japanese and Korean subtitles render as blank or tofu glyphs rather
+than failing loudly, because `subtitle_font_supports_text` fails open by design.
 
-Adding coverage needs no code change — drop an OFL-licensed face (Noto Sans SC,
-Noto Sans, or Source Han Sans) into `backend/resource/fonts/` and it is
-discovered at startup. Update
-`test_video.py::test_bundled_fonts_script_coverage`, which pins the current
-limitation so it cannot shrink unnoticed.
+Cyrillic and Greek were in that list until Noto Sans was added on 2026-08-30.
+It arrived for a narrower reason: Be Vietnam Pro, the default face until then,
+has no s-comma or t-comma (U+0219, U+021B) — two of the five letters Romanian
+needs — and lacks other marks besides, such as Latvian `ģ`. A font draws nothing
+at all for a glyph it does not have, so a correctly spelled Romanian subtitle
+arrived with holes in it. Noto Sans has the letters outright and covers Russian,
+Ukrainian, Bulgarian, Serbian and Greek on the way past. Be Vietnam Pro and
+Charm still ship and can still be chosen, so `subtitle_text_for_font` still
+substitutes what a chosen font cannot draw.
+
+Adding CJK needs no code change — drop an OFL-licensed face (Noto Sans SC or
+Source Han Sans) into `backend/resource/fonts/` and it is discovered at startup.
+Update `test_video.py::test_bundled_fonts_script_coverage`, which pins what each
+bundled face covers so it cannot shrink unnoticed.
 
 ## Bundled music — `backend/resource/songs/`
 

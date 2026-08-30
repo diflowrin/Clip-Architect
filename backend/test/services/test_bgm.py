@@ -401,6 +401,149 @@ class TestBackgroundMusicService(unittest.TestCase):
                 same_file, os.path.realpath(os.path.join(uploaded_dir, "same.mp3"))
             )
 
+    def test_the_random_pool_holds_only_the_tracks_that_ship(self):
+        """
+        "random" 只能抽中随应用发布的曲目。
+
+        用户上传的音频没有再分发授权，一旦进入抽签就可能被混进用户随后
+        发布的视频里；实际发生过的情况是一段为别的项目录的旁白，几周后
+        成了另一个视频的背景音乐。按名字选择仍然可以用上传曲目。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            Path(builtin_dir, "liquid-funk.mp3").write_bytes(b"builtin")
+            Path(uploaded_dir, "voice-over-abc.mp3").write_bytes(b"uploaded")
+
+            with (
+                patch.object(bgm.utils, "song_dir", return_value=builtin_dir),
+                patch.object(bgm, "uploaded_bgm_dir", return_value=uploaded_dir),
+            ):
+                bundled = bgm.bundled_bgm_files()
+                listed = bgm.list_bgm_files()
+
+            self.assertEqual(
+                [os.path.basename(path) for path in bundled], ["liquid-funk.mp3"]
+            )
+            # The upload is still offered - it is only never drawn.
+            self.assertEqual(
+                [os.path.basename(path) for path in listed],
+                ["liquid-funk.mp3", "voice-over-abc.mp3"],
+            )
+
+    def test_an_upload_shadowing_a_bundled_name_is_not_reported_as_bundled(self):
+        """
+        同名上传会在列表里覆盖内置曲目，此时该条目属于上传，不能被标成
+        bundled——否则表单会声称抽签能抽到它，而抽签解析到的是内置文件。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            Path(builtin_dir, "same.mp3").write_bytes(b"builtin")
+            Path(builtin_dir, "only-builtin.mp3").write_bytes(b"builtin")
+            Path(uploaded_dir, "same.mp3").write_bytes(b"uploaded")
+
+            with (
+                patch.object(bgm.utils, "song_dir", return_value=builtin_dir),
+                patch.object(bgm, "uploaded_bgm_dir", return_value=uploaded_dir),
+            ):
+                response = video_controller.get_bgm_list(_FakeRequest())
+
+            bundled_by_file = {
+                entry["file"]: entry["bundled"]
+                for entry in response["data"]["files"]
+            }
+            self.assertTrue(bundled_by_file["only-builtin.mp3"])
+            self.assertFalse(bundled_by_file["same.mp3"])
+
+    def test_deleting_an_upload_removes_it_from_the_library(self):
+        """
+        上传的曲目必须能删掉。此前只有上传和列出两个接口，一个文件一旦进来
+        就永远留在选择框里，唯一的清理办法是打开文件管理器。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            Path(builtin_dir, "liquid-funk.mp3").write_bytes(b"builtin")
+            uploaded = "Voice Over-4fca18fce7344f3aa824777a40d45c8c.mp3"
+            Path(uploaded_dir, uploaded).write_bytes(b"uploaded")
+
+            with (
+                patch.object(bgm.utils, "song_dir", return_value=builtin_dir),
+                patch.object(bgm, "uploaded_bgm_dir", return_value=uploaded_dir),
+            ):
+                response = video_controller.delete_bgm_file(
+                    _FakeRequest(), file_name=uploaded
+                )
+                remaining = video_controller.get_bgm_list(_FakeRequest())
+
+            self.assertEqual(response["status"], 200)
+            self.assertFalse(Path(uploaded_dir, uploaded).exists())
+            self.assertEqual(
+                [entry["file"] for entry in remaining["data"]["files"]],
+                ["liquid-funk.mp3"],
+            )
+
+    def test_a_bundled_track_cannot_be_deleted(self):
+        """
+        内置曲目是安装包的一部分——MSIX 安装目录本身就是只读的——所以删除
+        接口只解析上传目录。名字虽然存在于内置目录，对这个接口而言就是不存在。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            bundled = Path(builtin_dir, "liquid-funk.mp3")
+            bundled.write_bytes(b"builtin")
+
+            with (
+                patch.object(bgm.utils, "song_dir", return_value=builtin_dir),
+                patch.object(bgm, "uploaded_bgm_dir", return_value=uploaded_dir),
+                self.assertRaises(HttpException) as raised,
+            ):
+                video_controller.delete_bgm_file(
+                    _FakeRequest(), file_name="liquid-funk.mp3"
+                )
+
+            self.assertEqual(raised.exception.status_code, 404)
+            self.assertTrue(bundled.exists())
+
+    def test_delete_refuses_a_staging_file_and_a_directory_climb(self):
+        """
+        上传校验期间会在同一目录留下临时文件，删除接口不能把正在校验的上传
+        抽走；带路径分隔符的名字则被归一化成纯文件名，落不到目录之外。
+        """
+        with (
+            tempfile.TemporaryDirectory() as builtin_dir,
+            tempfile.TemporaryDirectory() as uploaded_dir,
+        ):
+            staging = Path(uploaded_dir, ".bgm-upload-pending.mp3")
+            staging.write_bytes(b"pending")
+            outside = Path(builtin_dir, "liquid-funk.mp3")
+            outside.write_bytes(b"builtin")
+
+            with (
+                patch.object(bgm.utils, "song_dir", return_value=builtin_dir),
+                patch.object(bgm, "uploaded_bgm_dir", return_value=uploaded_dir),
+            ):
+                with self.assertRaises(HttpException) as staged:
+                    video_controller.delete_bgm_file(
+                        _FakeRequest(), file_name=".bgm-upload-pending.mp3"
+                    )
+                with self.assertRaises(HttpException) as climbed:
+                    video_controller.delete_bgm_file(
+                        _FakeRequest(), file_name="../liquid-funk.mp3"
+                    )
+
+            self.assertEqual(staged.exception.status_code, 403)
+            self.assertTrue(staging.exists())
+            self.assertTrue(outside.exists())
+            self.assertEqual(climbed.exception.status_code, 404)
+
+
 
 if __name__ == "__main__":
     unittest.main()

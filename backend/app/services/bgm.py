@@ -315,33 +315,63 @@ def save_bgm_upload(filename: str, source: BinaryIO) -> str:
         _remove_staged_file(temp_path)
 
 
+def _playable_bgm_files_in(directory: str) -> dict[str, str]:
+    """可播放的背景音乐文件名到真实路径的映射，单个目录。"""
+    files_by_name: dict[str, str] = {}
+    if not os.path.isdir(directory):
+        return files_by_name
+    for name in sorted(os.listdir(directory), key=str.lower):
+        # 上传预检和最终保存都会短暂创建同目录文件。临时文件虽然带有合法
+        # 音频扩展名，但尚未完成校验，不能被随机 BGM 列表提前选中。
+        if name.startswith(_INTERNAL_UPLOAD_PREFIX):
+            continue
+        if Path(name).suffix.lower() not in SUPPORTED_BGM_EXTENSIONS:
+            continue
+        file_path = os.path.join(directory, name)
+        try:
+            # 枚举结果同样需要真实路径校验。否则攻击者可在允许目录中放置
+            # 指向外部文件的音频符号链接，再借随机 BGM 路径交给 MoviePy。
+            resolved_path = file_security.resolve_path_within_directory(
+                directory, file_path
+            )
+        except ValueError as exc:
+            logger.warning(
+                f"skip unsafe background music file: name={name}, error={str(exc)}"
+            )
+            continue
+        files_by_name[name] = resolved_path
+    return files_by_name
+
+
+def _sorted_by_name(files_by_name: dict[str, str]) -> list[str]:
+    return [files_by_name[name] for name in sorted(files_by_name, key=str.lower)]
+
+
+def bundled_bgm_files() -> list[str]:
+    """
+    The tracks that ship with the app, and nothing else.
+
+    This is the pool "random" draws from. Uploads are deliberately excluded:
+    every track here has an entry in LICENSES-third-party.md covering
+    redistribution, and an uploaded file has nothing of the sort - so letting
+    the dice reach it means the app can put audio the user has no licence for
+    into a video they then publish. It also surprises: a file uploaded once for
+    one clip stayed in the draw forever, and a Romanian voice-over recorded for
+    something else turned up as the soundtrack of a re-render weeks later.
+
+    Picking a track by name still reaches uploads, through ``list_bgm_files``.
+    Choosing your own music is the point of the upload button; having it chosen
+    for you is not.
+    """
+    return _sorted_by_name(_playable_bgm_files_in(utils.song_dir()))
+
+
 def list_bgm_files() -> list[str]:
     """列出用户上传和内置的可用背景音乐。"""
     files_by_name: dict[str, str] = {}
     for directory in (utils.song_dir(), uploaded_bgm_dir(create=True)):
-        if not os.path.isdir(directory):
-            continue
-        for name in sorted(os.listdir(directory), key=str.lower):
-            # 上传预检和最终保存都会短暂创建同目录文件。临时文件虽然带有合法
-            # 音频扩展名，但尚未完成校验，不能被随机 BGM 列表提前选中。
-            if name.startswith(_INTERNAL_UPLOAD_PREFIX):
-                continue
-            if Path(name).suffix.lower() not in SUPPORTED_BGM_EXTENSIONS:
-                continue
-            file_path = os.path.join(directory, name)
-            try:
-                # 枚举结果同样需要真实路径校验。否则攻击者可在允许目录中放置
-                # 指向外部文件的音频符号链接，再借随机 BGM 路径交给 MoviePy。
-                resolved_path = file_security.resolve_path_within_directory(
-                    directory, file_path
-                )
-            except ValueError as exc:
-                logger.warning(
-                    f"skip unsafe background music file: name={name}, error={str(exc)}"
-                )
-                continue
-            files_by_name[name] = resolved_path
-    return [files_by_name[name] for name in sorted(files_by_name, key=str.lower)]
+        files_by_name.update(_playable_bgm_files_in(directory))
+    return _sorted_by_name(files_by_name)
 
 
 def resolve_bgm_file(unsafe_path: str) -> str:

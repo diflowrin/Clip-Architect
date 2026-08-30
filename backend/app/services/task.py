@@ -311,6 +311,10 @@ def generate_script(task_id, params):
             custom_system_prompt=params.custom_system_prompt,
             target_seconds=getattr(params, "video_duration", 0) or 0,
             words_per_second=llm.NARRATION_WORDS_PER_SECOND * voice_rate,
+            # The aspect is the only thing the form says about where the video
+            # is going to be watched, and a vertical clip needs a different
+            # first sentence than a widescreen one.
+            video_aspect=getattr(params, "video_aspect", None),
         )
     else:
         logger.debug(f"video script: \n{video_script}")
@@ -828,12 +832,141 @@ def _record_loomloom_run_reference(
     return None
 
 
+def _bgm_recipe(params) -> dict:
+    """
+    What the form asked for where music is concerned.
+
+    Deliberately just the two fields that decide *which* track plays. Volume is
+    applied while mixing and reaches the next render on its own, so putting it
+    here would throw away a stable pick over a slider nudge.
+    """
+    return {
+        "bgm_type": str(getattr(params, "bgm_type", "") or ""),
+        "bgm_file": str(getattr(params, "bgm_file", "") or ""),
+    }
+
+
+def _recorded_bgm_selection(task_id: str) -> dict | None:
+    """The music choice the last render of this task settled on, if any."""
+    manifest = task_artifacts.read_script_data(task_id)
+    if not isinstance(manifest, dict):
+        return None
+    recorded = manifest.get("bgm_selection")
+    return recorded if isinstance(recorded, dict) else None
+
+
+def _record_bgm_selection(task_id: str, recipe: dict, chosen_files: list) -> None:
+    """
+    Write down what the music request was and which tracks it resolved to.
+
+    Recorded for a named track too, not only a random one: switching to a
+    specific song and back to Random has to draw again, and the only thing that
+    tells the next render those are different requests is a recipe that no
+    longer matches. A failure here is logged and swallowed - the video is
+    rendered, and an unstable music pick is not worth failing it over.
+    """
+    selection = {"recipe": recipe, "chosen_files": list(chosen_files)}
+    try:
+        # `patch_script_data` gives up when there is no manifest yet, which is
+        # the normal state for a task rehydrated from disk after a restart.
+        # Left at that, the pick was never written down and every render drew
+        # again - the exact behaviour this exists to stop. Nothing is lost by
+        # creating the file: the replace only happens when there was none.
+        if not task_artifacts.patch_script_data(task_id, bgm_selection=selection):
+            task_artifacts.write_script_data(task_id, {"bgm_selection": selection})
+    except Exception as exc:
+        logger.warning(
+            f"failed to record the background music selection, task_id: {task_id}, "
+            f"error: {type(exc).__name__}, detail: {exc}"
+        )
+
+
+def _bundled_bgm_path(name: str) -> str:
+    """
+    Absolute path of a track that ships with the app, or "" if it does not.
+
+    Looked up in the bundled list rather than through ``resolve_bgm_file``,
+    which prefers an upload of the same name - that shadowing is exactly what
+    narrowing the random pool to the shipped folder was meant to prevent, and
+    reintroducing it here would let an upload named `liquid-funk.mp3` capture a
+    pin that was drawn from the licensed library.
+    """
+    if not name:
+        return ""
+    for bundled_path in bgm_service.bundled_bgm_files():
+        if os.path.basename(bundled_path).lower() == name.lower():
+            return bundled_path
+    return ""
+
+
+def _stable_bgm_plan(task_id, params) -> list:
+    """
+    Which track each video of this render should use, one entry per video.
+
+    Random used to be re-rolled inside ``generate_video`` on every render, so
+    re-rendering a reviewed task - the flow whose entire premise is "change one
+    thing and run it again" - silently swapped the soundtrack as well. The pick
+    is made here instead, once, and written to the manifest so the next render
+    of the same task reuses it. It is dropped as soon as the form asks for
+    something else, which is what the recipe comparison is for.
+
+    Returns absolute paths, and an empty list when there is nothing to pin: a
+    generated soundtrack is made fresh per render and priced per call, a named
+    track needs no help staying the same, and music switched off has no track.
+
+    One entry per video because ``video_count`` above 1 deliberately gives each
+    output its own draw; collapsing them onto one track would take that away.
+    """
+    if not bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume):
+        return []
+
+    recipe = _bgm_recipe(params)
+    if params.bgm_type in _VIDEO_MUSIC_PROVIDERS:
+        # A generated soundtrack is made fresh for every render and billed per
+        # call, so there is nothing to keep. The request is still recorded, so
+        # that going back to Random afterwards counts as a change.
+        _record_bgm_selection(task_id, recipe, [])
+        return []
+    if params.bgm_type != "random":
+        # A named track needs no help staying the same. Recording it is what
+        # makes returning to Random later draw again, instead of resurrecting
+        # whatever this task last drew.
+        _record_bgm_selection(task_id, recipe, [str(params.bgm_file or "")])
+        return []
+
+    recorded = _recorded_bgm_selection(task_id)
+    previous = []
+    if isinstance(recorded, dict) and recorded.get("recipe") == recipe:
+        previous = [
+            name
+            for name in (recorded.get("chosen_files") or [])
+            if isinstance(name, str)
+        ]
+
+    chosen_names = []
+    for index in range(max(int(params.video_count or 1), 1)):
+        kept = previous[index] if index < len(previous) else ""
+        # A pinned track can stop shipping between releases, and a manifest
+        # copied from another install can name one this build never had.
+        if kept and _bundled_bgm_path(kept):
+            chosen_names.append(kept)
+            continue
+        chosen_names.append(os.path.basename(video.get_bgm_file(bgm_type="random")))
+
+    _record_bgm_selection(task_id, recipe, chosen_names)
+    return [_bundled_bgm_path(name) for name in chosen_names]
+
+
 def generate_final_videos(
     task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
 ):
     final_video_paths = []
     combined_video_paths = []
     warnings = []
+    # Decided once, before anything is written, so a re-render of this task
+    # keeps the soundtrack it already had. Empty whenever there is nothing to
+    # pin; see _stable_bgm_plan.
+    bgm_plan = _stable_bgm_plan(task_id, params)
     video_music_provider = _VIDEO_MUSIC_PROVIDERS.get(params.bgm_type)
     video_music_requested = (
         video_music_provider is not None
@@ -961,12 +1094,24 @@ def generate_final_videos(
                 _of_total("Adding subtitles and audio", _index),
             )
 
+        # The pinned track is handed over as an explicitly named file, by
+        # absolute path. A copy rather than a mutation: `params` is what the
+        # task record and the manifest keep, and rewriting bgm_type to "file"
+        # in it would make the form reopen on a specific song where the user
+        # had chosen Random.
+        pinned_bgm = bgm_plan[i] if i < len(bgm_plan) else ""
+        render_params = (
+            params.model_copy(update={"bgm_type": "file", "bgm_file": pinned_bgm})
+            if pinned_bgm
+            else params
+        )
+
         bgm_mix_succeeded = video.generate_video(
             video_path=combined_video_path,
             audio_path=audio_file,
             subtitle_path=subtitle_path,
             output_file=final_video_path,
-            params=params,
+            params=render_params,
             bgm_file_override=bgm_file_override,
             progress_callback=report_render_progress,
         )

@@ -28,6 +28,15 @@ interface Props {
    *  pairing each one with a paragraph would invent a connection that the
    *  render does not make. */
   matchedToScript: boolean;
+  /** Which stock provider the form asked for. A keyword search goes to it, so
+   *  a swapped-in clip comes from the same catalogue as the rest. A project
+   *  made from local files has no catalogue of its own; the backend picks a
+   *  stock one, because wanting a single stock clip among your own footage is
+   *  an ordinary thing to ask for. */
+  source: string | undefined;
+  /** How long one scene runs. It sets the shortest clip worth searching for,
+   *  the same way the pipeline's own download does. */
+  clipDuration: number | undefined;
   /** Failure from the render request. Shown next to the button that caused it:
    *  the page-level banner sits far above and is off-screen while reviewing. */
   renderError: string | null;
@@ -49,6 +58,12 @@ interface Clip {
   /** The script paragraph this clip was matched against, captured when the
    *  list is built: once the user reorders, position no longer implies it. */
   paragraph: string | null;
+  /** The keyword this clip was fetched for, when it replaced another one by
+   *  search. Null for the clips the pipeline itself matched. */
+  searchTerm: string | null;
+  /** Which stock provider supplied it. Not always the one the form asked
+   *  for: a provider with nothing new left falls through to another. */
+  searchSource: string | null;
 }
 
 /** Split the script into the paragraphs the clips were matched against, so a
@@ -75,6 +90,17 @@ const PREVIEW_BY_ASPECT: Record<VideoAspect, { ratio: string; width: string }> =
   '16:9': { ratio: '16 / 9', width: '280px' },
 };
 
+/** Strip the correlation id the backend puts in front of every message.
+ *
+ *  Every route answers `<request id>: <what went wrong>`, which is what ties
+ *  a failure to a log line. Here the message is the whole point - "no new clip
+ *  found for X, try another keyword" is an instruction the user acts on - and
+ *  a uuid in front of it reads as a crash. Only a leading token with no space
+ *  in it is removed, so a message that never had one is untouched. */
+function withoutRequestId(message: string): string {
+  return message.replace(/^\S+:\s+/, '');
+}
+
 function fileName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
@@ -99,6 +125,8 @@ export function MaterialReview({
   aspect,
   rendered,
   matchedToScript,
+  source,
+  clipDuration,
   renderError,
   onRender,
   onCancel,
@@ -118,6 +146,8 @@ export function MaterialReview({
       added: false,
       removed: false,
       paragraph: paragraphs[index] ?? null,
+      searchTerm: null,
+      searchSource: null,
     }));
   }, [task.material_paths, task.materials, task.script, matchedToScript]);
 
@@ -125,6 +155,19 @@ export function MaterialReview({
   const [keepOrder, setKeepOrder] = useState(concatMode === 'sequential');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  // Keyword search, per card: which one has the box open, what was typed in
+  // it, which one is fetching, and what the provider said when it could not.
+  // All keyed by clip id rather than position, because the list is reordered
+  // underneath and a search started on clip 3 must land on the same clip.
+  const [searchOpenId, setSearchOpenId] = useState<string | null>(null);
+  const [searchTerms, setSearchTerms] = useState<Record<string, string>>({});
+  const [searchingId, setSearchingId] = useState<string | null>(null);
+  const [searchErrors, setSearchErrors] = useState<Record<string, string>>({});
+  // Every clip the search has offered in this session, including the ones
+  // since replaced. The clip list alone is not enough to ask for something
+  // new: swapping A for B takes A out of the list, so the next fetch was
+  // free to hand A straight back, and the same two clips took turns forever.
+  const [offeredPaths, setOfferedPaths] = useState<string[]>([]);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const replacingId = useRef<string | null>(null);
   const [expanded, setExpanded] = useState<Clip | null>(null);
@@ -212,6 +255,77 @@ export function MaterialReview({
     }
   }
 
+  /** Open or close the keyword box on a card. It starts empty on purpose: the
+   *  paragraph this clip illustrates is already printed underneath, and a
+   *  stock search takes a couple of words, not a sentence of narration. */
+  function toggleSearch(clip: Clip) {
+    setSearchOpenId((current) => (current === clip.id ? null : clip.id));
+  }
+
+  /** Fetch a stock clip for a keyword and put it in this clip's place.
+   *
+   *  What the backend skips is the union of the clips on the timeline and
+   *  every clip this session has already been offered - the second half is
+   *  what makes "another one" mean another one. A replaced clip leaves the
+   *  list, so excluding only the list let the search hand the previous clip
+   *  straight back, and two clips took turns for as long as you pressed.
+   *
+   *  Nothing is deleted: a clip that has been swapped away stays in the
+   *  download cache, where the library can offer it again. */
+  async function runSearch(id: string, keyword?: string) {
+    const term = (keyword ?? searchTerms[id] ?? '').trim();
+    if (!term) {
+      setSearchErrors((previous) => ({
+        ...previous,
+        [id]: 'Type a keyword to search for.',
+      }));
+      return;
+    }
+
+    setSearchingId(id);
+    setSearchErrors((previous) => {
+      const next = { ...previous };
+      delete next[id];
+      return next;
+    });
+    try {
+      const result = await api.searchMaterial(task.task_id, {
+        search_term: term,
+        video_source: source,
+        video_aspect: aspect,
+        video_clip_duration: clipDuration,
+        exclude: [...new Set([...clips.map((clip) => clip.path), ...offeredPaths])],
+      });
+      setOfferedPaths((previous) => [...previous, result.material_path]);
+      setSearchTerms((previous) => ({ ...previous, [id]: term }));
+      setClips((previous) =>
+        previous.map((clip) =>
+          clip.id === id
+            ? {
+                ...clip,
+                path: result.material_path,
+                preview: result.material,
+                label: fileName(result.material_path),
+                added: false,
+                removed: false,
+                searchTerm: result.search_term,
+                searchSource: result.source,
+              }
+            : clip,
+        ),
+      );
+    } catch (cause) {
+      setSearchErrors((previous) => ({
+        ...previous,
+        [id]: withoutRequestId(
+          cause instanceof Error ? cause.message : String(cause),
+        ),
+      }));
+    } finally {
+      setSearchingId(null);
+    }
+  }
+
   function dropOnto(targetIndex: number) {
     const fromIndex = clips.findIndex((clip) => clip.id === draggingId);
     setDraggingId(null);
@@ -240,22 +354,25 @@ export function MaterialReview({
               <>
                 The last render used these {clips.length} clip
                 {clips.length === 1 ? '' : 's'}. Remove one, drag a clip to move
-                it, or swap in your own footage, then render again - the new
-                video replaces the one on this task.
+                it, fetch a different one by keyword, or swap in your own
+                footage, then render again - the new video replaces the one on
+                this task.
               </>
             ) : matchedToScript ? (
               <>
                 {clips.length} clip{clips.length === 1 ? '' : 's'} matched your
                 script. Remove anything that does not fit, drag a clip to move
-                it, or swap in your own footage. Rendering starts only when you
-                are happy with the selection.
+                it, fetch a different one by keyword, or swap in your own
+                footage. Rendering starts only when you are happy with the
+                selection.
               </>
             ) : (
               <>
                 {clips.length} clip{clips.length === 1 ? '' : 's'} from your own
                 files, ready to render in this order. Drop anything you do not
-                want, drag a clip to move it, or swap in another file.
-                Rendering starts only when you are happy with the selection.
+                want, drag a clip to move it, swap in another file, or fetch a
+                stock clip by keyword. Rendering starts only when you are happy
+                with the selection.
               </>
             )}
           </p>
@@ -435,6 +552,12 @@ export function MaterialReview({
                 <p className="review__clip-name" title={clip.path}>
                   {clip.label}
                 </p>
+                {clip.searchTerm && (
+                  <p className="review__swapped">
+                    Fetched for “{clip.searchTerm}”
+                    {clip.searchSource ? ` · ${clip.searchSource}` : ''}
+                  </p>
+                )}
                 {clip.paragraph && <p className="review__paragraph">{clip.paragraph}</p>}
                 <div className="button-row">
                   <button
@@ -453,7 +576,88 @@ export function MaterialReview({
                   >
                     {uploadingId === clip.id ? 'Uploading…' : 'Replace with my file'}
                   </button>
+                  <button
+                    type="button"
+                    className="button"
+                    aria-expanded={searchOpenId === clip.id}
+                    onClick={() => toggleSearch(clip)}
+                    disabled={busy}
+                  >
+                    Find by keyword
+                  </button>
+                  {/* Only after a keyword has fetched something: it repeats
+                      that search without reopening the box or retyping, which
+                      is the whole point of trying a few clips in a row. */}
+                  {clip.searchTerm && (
+                    <button
+                      type="button"
+                      className="button"
+                      title={`Fetch another clip for "${clip.searchTerm}"`}
+                      onClick={() =>
+                        void runSearch(clip.id, clip.searchTerm ?? undefined)
+                      }
+                      disabled={busy || searchingId === clip.id}
+                    >
+                      {searchingId === clip.id ? 'Loading…' : 'Another clip'}
+                    </button>
+                  )}
                 </div>
+
+                {searchOpenId === clip.id && (
+                  <div className="review__search">
+                    <label
+                      className="review__search-label"
+                      htmlFor={`search-${clip.id}`}
+                    >
+                      Download another clip for
+                    </label>
+                    <div className="review__search-row">
+                      <input
+                        id={`search-${clip.id}`}
+                        type="text"
+                        placeholder="e.g. city skyline at night"
+                        value={searchTerms[clip.id] ?? ''}
+                        disabled={busy || searchingId === clip.id}
+                        onChange={(event) =>
+                          setSearchTerms((previous) => ({
+                            ...previous,
+                            [clip.id]: event.target.value,
+                          }))
+                        }
+                        onKeyDown={(event) => {
+                          // The box sits inside the generate form, where Enter
+                          // would otherwise submit the whole thing and start a
+                          // second render.
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            void runSearch(clip.id);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={() => void runSearch(clip.id)}
+                        disabled={busy || searchingId === clip.id}
+                      >
+                        {searchingId === clip.id ? 'Searching…' : 'Fetch clip'}
+                      </button>
+                    </div>
+                    <p className="review__search-hint">
+                      {clip.searchTerm
+                        ? 'Fetch again for another clip: everything this keyword has already shown you is skipped.'
+                        : 'Downloads one stock clip and puts it in this place. Nothing is rendered yet.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Outside the box on purpose: "Another clip" works with the
+                    box closed, and its failures have to be readable there. */}
+                {searchErrors[clip.id] && (
+                  <p className="review__error review__error--inline" role="alert">
+                    {searchErrors[clip.id]}
+                  </p>
+                )}
               </div>
             </li>
           );

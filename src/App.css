@@ -1259,6 +1259,55 @@ input[type='range'] {
   color: var(--text-muted);
 }
 
+/* Where a clip came from, when the user fetched it here rather than the
+   pipeline matching it. Cards otherwise look identical after a swap. */
+.review__swapped {
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* The keyword box, opened per card. A review card is as narrow as the video
+   it previews, so the field and its button stack rather than sharing a row. */
+.review__search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.review__search-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.review__search-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review__search-row input[type='text'] {
+  font-size: 13px;
+}
+
+.review__search-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+/* The page-level version carries the gap to whatever follows it; inside a card
+   the surrounding flex column already spaces its children. */
+.review__error--inline {
+  margin: 0;
+}
+
 .review__body .button-row {
   margin-top: auto;
 }

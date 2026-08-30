@@ -690,7 +690,14 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
         return resolved_bgm_file
 
     if bgm_type == "random":
-        files = bgm_service.list_bgm_files()
+        # Bundled tracks only. Uploads stay pickable by name through
+        # `bgm_file` above; what they must not be is picked *for* the user.
+        # Every track that ships is covered by LICENSES-third-party.md, and an
+        # uploaded one is covered by nothing - so drawing from the whole
+        # library meant the app could mix audio the user has no redistribution
+        # grant for into a video they go on to cross-post. It also surprised:
+        # a file uploaded once for one clip stayed in the draw forever.
+        files = bgm_service.bundled_bgm_files()
         # 当背景音乐目录为空时，直接回退为“不使用 BGM”，避免 random.choice([]) 抛异常。
         if not files:
             logger.warning("no background music files found")
@@ -1253,6 +1260,71 @@ def subtitle_font_supports_text(font_path: str, text: str) -> bool:
     return _subtitle_font_supports_sample(font_path, sample)
 
 
+# Letters a bundled font may not have, and the letter that stands for the same
+# thing in the same language.
+#
+# Romanian writes s-comma and t-comma, U+0219 and U+021B. Be Vietnam Pro - the
+# default subtitle face until Noto Sans replaced it - draws only the cedilla
+# forms, U+015F and U+0163, which is how those two letters were encoded before
+# Unicode 3.0 and what Romanian text still arrives as from half the internet. A
+# glyph a font does not have is not drawn at all, not even as a box, so a
+# correctly spelled "știți" reached the screen as "tii" with two holes in it -
+# worse than either spelling. The default has the letters now; this is for the
+# faces that still ship without them, and for whatever a user picks.
+_SUBTITLE_GLYPH_EQUIVALENTS = {
+    "ș": "ş",
+    "Ș": "Ş",
+    "ț": "ţ",
+    "Ț": "Ţ",
+    "ş": "ș",
+    "Ş": "Ș",
+    "ţ": "ț",
+    "Ţ": "Ț",
+}
+
+
+@lru_cache(maxsize=512)
+def _subtitle_char_for_font(char: str, font_path: str) -> str:
+    if _subtitle_font_supports_sample(font_path, char):
+        return char
+
+    swap = _SUBTITLE_GLYPH_EQUIVALENTS.get(char)
+    if swap and _subtitle_font_supports_sample(font_path, swap):
+        return swap
+
+    # Last resort: the letter without its mark. Misspelling a word is a small
+    # loss next to a gap where a letter should be, and a reader fills the
+    # accent back in. A character that decomposes to nothing - CJK, Cyrillic -
+    # is left exactly as it is, so an uncovered script still fails visibly
+    # rather than turning into something it never said.
+    stripped = "".join(
+        part
+        for part in unicodedata.normalize("NFD", char)
+        if not unicodedata.combining(part)
+    )
+    if (
+        stripped
+        and stripped != char
+        and _subtitle_font_supports_sample(font_path, stripped)
+    ):
+        return stripped
+
+    return char
+
+
+def subtitle_text_for_font(text: str, font_path: str) -> str:
+    """
+    The subtitle line as this font can actually draw it.
+
+    Only what is burned in goes through this; the .srt on disk keeps the
+    spelling the narration was written with, because that file is the record of
+    what was said and is read by people and players that have their own fonts.
+    """
+    if not text or not font_path:
+        return text
+    return "".join(_subtitle_char_for_font(char, font_path) for char in text)
+
+
 def generate_video(
     video_path: str,
     audio_path: str,
@@ -1292,7 +1364,7 @@ def generate_video(
     font_path = ""
     if params.subtitle_enabled:
         if not params.font_name:
-            params.font_name = "BeVietnamPro-Bold.ttf"
+            params.font_name = "NotoSans-Bold.ttf"
         font_path = os.path.join(utils.font_dir(), params.font_name)
         if os.name == "nt":
             font_path = font_path.replace("\\", "/")
@@ -1310,7 +1382,9 @@ def generate_video(
     def create_text_clip(subtitle_item):
         params.font_size = int(params.font_size)
         params.stroke_width = int(params.stroke_width)
-        phrase = subtitle_item[1]
+        # Substituted before wrapping, so the line is measured as it will be
+        # drawn rather than as it was written.
+        phrase = subtitle_text_for_font(subtitle_item[1], font_path)
         max_width = video_width * 0.9
         bg_color = resolve_subtitle_background_color()
         rounded_bg_enabled = bool(

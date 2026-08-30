@@ -11,7 +11,7 @@ whoever installed the app.
 | `LICENSE-MoneyPrinterTurbo.txt` | the upstream project this is built on — MIT |
 | `FFMPEG-LICENSE.md`, `FFMPEG-BUILD.txt` | the bundled FFmpeg and what is compiled into it |
 | `LGPL-3.0.txt`, `LGPL-2.1.txt` | the Lesser GPL, for FFmpeg and for edge-tts |
-| `OFL-1.1-BeVietnamPro.txt`, `OFL-1.1-Charm.txt` | the bundled subtitle fonts |
+| `OFL-1.1-NotoSans.txt`, `OFL-1.1-BeVietnamPro.txt`, `OFL-1.1-Charm.txt` | the bundled subtitle fonts |
 | `LICENSES-python.txt` | every Python package inside the frozen backend |
 
 ## Clip Architect — GPL-3.0
@@ -72,13 +72,14 @@ your own build of the same version.
 
 ## Subtitle fonts — SIL Open Font License 1.1
 
-Both faces in `resource/fonts/` are under the
+Every face in `resource/fonts/` is under the
 [SIL Open Font License 1.1](https://openfontlicense.org), whose full text —
 including each font's own copyright line — is in the files listed below. Neither
 font is sold, and neither is distributed under a name reserved by its authors.
 
 | Font | Copyright | Licence text |
 |---|---|---|
+| Noto Sans (Bold, Medium) | © 2022 The Noto Project Authors | `OFL-1.1-NotoSans.txt` |
 | Be Vietnam Pro (Bold, Medium) | © 2021 The Be Vietnam Pro Project Authors | `OFL-1.1-BeVietnamPro.txt` |
 | Charm (Regular, Bold) | © 2018 The Charm Project Authors | `OFL-1.1-Charm.txt` |
 

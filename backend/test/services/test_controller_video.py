@@ -1082,6 +1082,266 @@ class TestReopenTaskForReviewHTTP(unittest.TestCase):
         self.assertFalse(data["needs_narration"])
 
 
+class TestKeywordMaterialSearch(unittest.TestCase):
+    """
+    审阅界面按关键词换片段的接口。片段要落在任务目录里，否则预览播不了；
+    失败原因要说人话，因为这是用户唯一能看到的解释。
+    """
+
+    @staticmethod
+    def _request():
+        return SimpleNamespace(headers={"x-task-id": "request-123"})
+
+    def setUp(self):
+        self.temp_root = tempfile.mkdtemp()
+        self.tasks_root = os.path.join(self.temp_root, "tasks")
+        self.task_dir = os.path.join(self.tasks_root, "task-123")
+        os.makedirs(self.task_dir)
+        self.clip = os.path.join(self.task_dir, "vid-new.mp4")
+        Path(self.clip).write_bytes(b"video")
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_root, ignore_errors=True)
+
+    def _task_dir(self, sub_dir=""):
+        return os.path.join(self.tasks_root, sub_dir) if sub_dir else self.tasks_root
+
+    def _body(self, **overrides):
+        body = {
+            "search_term": "city skyline",
+            "video_source": "pexels",
+            "video_aspect": "9:16",
+            "video_clip_duration": 5,
+            "exclude": [],
+        }
+        body.update(overrides)
+        return SimpleNamespace(**body)
+
+    def test_requires_an_existing_task(self):
+        with patch.object(video_controller.sm.state, "get_task", return_value=None):
+            with self.assertRaises(HttpException) as raised:
+                video_controller.search_replacement_material(
+                    self._request(), self._body(), task_id="missing"
+                )
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_rejects_an_empty_keyword_without_calling_the_provider(self):
+        """空关键词会让库存源返回整个首页，等于随机换一段，不是用户要的。"""
+        with (
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service, "search_replacement_video"
+            ) as search,
+        ):
+            with self.assertRaises(HttpException) as raised:
+                video_controller.search_replacement_material(
+                    self._request(), self._body(search_term="   "), task_id="task-123"
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        search.assert_not_called()
+
+    def test_downloads_into_the_task_directory(self):
+        """
+        预览只从任务目录播放，所以换来的片段必须下载到那里；下载到共享缓存
+        的话，用户在审阅界面看到的是一段没有预览的片段。
+        """
+        with (
+            patch.object(
+                video_controller.utils, "task_dir", side_effect=self._task_dir
+            ),
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service,
+                "search_replacement_video",
+                return_value=video_controller.material_service.ReplacementClip(
+                    self.clip, "pexels"
+                ),
+            ) as search,
+        ):
+            response = video_controller.search_replacement_material(
+                self._request(), self._body(), task_id="task-123"
+            )
+
+        self.assertEqual(search.call_args.kwargs["save_dir"], self.task_dir)
+        self.assertEqual(response["data"]["material_path"], self.clip)
+        self.assertEqual(response["data"]["material"], "/tasks/task-123/vid-new.mp4")
+
+    def test_the_answer_names_the_provider_that_supplied_the_clip(self):
+        """
+        见底的源会顺延到别的库存源，所以响应里的 source 必须是真正给出片段
+        的那个——回传请求里的值等于在素材来源上撒谎。
+        """
+        with (
+            patch.object(
+                video_controller.utils, "task_dir", side_effect=self._task_dir
+            ),
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service,
+                "search_replacement_video",
+                return_value=video_controller.material_service.ReplacementClip(
+                    self.clip, "pixabay"
+                ),
+            ),
+        ):
+            response = video_controller.search_replacement_material(
+                self._request(), self._body(video_source="pexels"), task_id="task-123"
+            )
+
+        self.assertEqual(response["data"]["source"], "pixabay")
+
+    def test_passes_the_timeline_along_so_the_next_press_differs(self):
+        """
+        排除列表要原样传下去，否则"再找一个"每次都返回同一段——搜索结果
+        缓存一天，候选顺序是稳定的。
+        """
+        taken = [os.path.join(self.task_dir, "vid-old.mp4")]
+        with (
+            patch.object(
+                video_controller.utils, "task_dir", side_effect=self._task_dir
+            ),
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service,
+                "search_replacement_video",
+                return_value=video_controller.material_service.ReplacementClip(
+                    self.clip, "pexels"
+                ),
+            ) as search,
+        ):
+            video_controller.search_replacement_material(
+                self._request(), self._body(exclude=taken), task_id="task-123"
+            )
+
+        self.assertEqual(search.call_args.kwargs["exclude_paths"], taken)
+
+    def test_missing_credentials_answer_with_where_to_set_them(self):
+        """
+        供应商 Key 缺失时抛出的 ValueError 指向 config.toml，而桌面版用户
+        是在 Settings 里填的。原样透传等于给了一条他们无法执行的指引。
+        """
+        with (
+            patch.object(
+                video_controller.utils, "task_dir", side_effect=self._task_dir
+            ),
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service,
+                "search_replacement_video",
+                side_effect=ValueError("pexels_api_keys is not set"),
+            ),
+        ):
+            with self.assertRaises(HttpException) as raised:
+                video_controller.search_replacement_material(
+                    self._request(), self._body(), task_id="task-123"
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Settings", str(raised.exception.message))
+
+    def test_no_result_names_the_keyword_that_found_nothing(self):
+        with (
+            patch.object(
+                video_controller.utils, "task_dir", side_effect=self._task_dir
+            ),
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service,
+                "search_replacement_video",
+                return_value=video_controller.material_service.ReplacementClip(
+                    "", ""
+                ),
+            ),
+        ):
+            with self.assertRaises(HttpException) as raised:
+                video_controller.search_replacement_material(
+                    self._request(), self._body(), task_id="task-123"
+                )
+
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertIn("city skyline", str(raised.exception.message))
+
+
+class TestKeywordMaterialSearchHTTP(unittest.TestCase):
+    """
+    走真实路由：控制器用例直接调用函数，看不出装饰器绑到了哪个函数上。
+    """
+
+    def setUp(self):
+        self.original_app_config = dict(config.app)
+        config.app["api_key"] = ""
+        self.client = TestClient(asgi.app)
+
+        self.temp_root = tempfile.mkdtemp()
+        self.tasks_root = os.path.join(self.temp_root, "tasks")
+        self.task_dir = os.path.join(self.tasks_root, "task-123")
+        os.makedirs(self.task_dir)
+        self.clip = os.path.join(self.task_dir, "vid-new.mp4")
+        Path(self.clip).write_bytes(b"video")
+
+    def tearDown(self):
+        config.app.clear()
+        config.app.update(self.original_app_config)
+        shutil.rmtree(self.temp_root, ignore_errors=True)
+
+    def _task_dir(self, sub_dir=""):
+        return os.path.join(self.tasks_root, sub_dir) if sub_dir else self.tasks_root
+
+    def test_the_route_answers_with_the_fetched_clip(self):
+        with (
+            patch.object(
+                video_controller.utils, "task_dir", side_effect=self._task_dir
+            ),
+            patch.object(
+                video_controller.sm.state,
+                "get_task",
+                return_value={"task_id": "task-123"},
+            ),
+            patch.object(
+                video_controller.material_service,
+                "search_replacement_video",
+                return_value=video_controller.material_service.ReplacementClip(
+                    self.clip, "pexels"
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/api/v1/tasks/task-123/material_search",
+                json={"search_term": "city skyline", "exclude": []},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["material_path"], self.clip)
+        self.assertEqual(data["search_term"], "city skyline")
+
+
 class TestTaskResponseAudio(unittest.TestCase):
     """
     配音和成片一样是任务产物：前端要播放它，也要从它读出视频时长。

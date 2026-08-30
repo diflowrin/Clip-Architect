@@ -24,6 +24,7 @@ from app.models.schema import (
     BgmRetrieveResponse,
     BgmUploadResponse,
     DownloadedMaterialRetrieveResponse,
+    MaterialSearchRequest,
     RenderReviewedRequest,
     ReopenTaskRequest,
     SubtitleRequest,
@@ -37,6 +38,7 @@ from app.models.schema import (
     VideoMaterialRetrieveResponse
 )
 from app.services import bgm as bgm_service
+from app.services import material as material_service
 from app.services import material_upload as material_upload_service
 from app.services import state as sm
 from app.services import task as tm
@@ -392,6 +394,108 @@ def render_reviewed_task(
     return utils.get_response(200, {"task_id": task_id})
 
 
+@router.post(
+    "/tasks/{task_id}/material_search",
+    summary="Fetch one replacement clip for a keyword",
+)
+def search_replacement_material(
+    request: Request,
+    body: MaterialSearchRequest,
+    task_id: str = Path(..., description="Task ID"),
+):
+    """
+    Download one stock clip for a keyword, for the review screen to swap in.
+
+    The clip lands in the task directory, the way a review pass forces its
+    downloads there, so it streams back through the same route as the rest of
+    the list and can be watched before anything is rendered.
+
+    Nothing about the task changes: this hands back a path, and the clip only
+    enters the video if the user keeps it and renders. ``exclude`` is what the
+    timeline already holds, so pressing the button again walks on to the next
+    candidate instead of returning the same clip.
+    """
+    request_id = base.get_task_id(request)
+    task = sm.state.get_task(task_id)
+    if not task:
+        raise HttpException(
+            task_id=task_id, status_code=404, message=f"{request_id}: task not found"
+        )
+
+    search_term = (body.search_term or "").strip()
+    if not search_term:
+        raise HttpException(
+            task_id=task_id,
+            status_code=400,
+            message=f"{request_id}: enter a keyword to search for",
+        )
+
+    source = body.video_source or material_service.DEFAULT_SEARCHABLE_SOURCE
+    if source not in material_service.SEARCHABLE_SOURCES:
+        # A task made from the user's own uploads has no catalogue behind it,
+        # and neither has a generated source. Wanting one stock clip in the
+        # middle of either is still an ordinary thing to ask for.
+        source = material_service.DEFAULT_SEARCHABLE_SOURCE
+
+    try:
+        found = material_service.search_replacement_video(
+            task_id=task_id,
+            search_term=search_term,
+            source=source,
+            video_aspect=body.video_aspect,
+            max_clip_duration=body.video_clip_duration,
+            exclude_paths=list(body.exclude or []),
+            save_dir=utils.task_dir(task_id),
+        )
+    except ValueError as exc:
+        # The provider key is missing. Its own message names config.toml, which
+        # is not where this app's user sets it, so say where it is instead.
+        logger.warning(
+            f"keyword material search has no credentials, request_id: {request_id}, "
+            f"source: {source}, error: {str(exc)}"
+        )
+        raise HttpException(
+            task_id=task_id,
+            status_code=400,
+            message=(
+                f"{request_id}: no {source} API key is set. "
+                f"Add one in Settings to search for clips."
+            ),
+        )
+
+    if not found.path:
+        # Everything this keyword has to offer is already on screen. Naming
+        # the keyword matters: the fix is to type a different one, and the
+        # message is the only place that says so.
+        raise HttpException(
+            task_id=task_id,
+            status_code=404,
+            message=(
+                f"{request_id}: no clip left for '{search_term}' that you have "
+                f"not already seen. Try another keyword."
+            ),
+        )
+
+    endpoint = config.app.get("endpoint", "").rstrip("/")
+    logger.success(
+        f"replacement clip ready: task_id={task_id}, term={search_term!r}, "
+        f"source={found.provider}"
+    )
+    return utils.get_response(
+        200,
+        {
+            "material_path": found.path,
+            "material": _streamable_materials(
+                [found.path], endpoint, utils.task_dir()
+            )[0],
+            "search_term": search_term,
+            # Who actually answered, which is not always who was asked: an
+            # exhausted provider falls through to the other stock sources.
+            "source": found.provider,
+        },
+    )
+
+
 def _split_saved_materials(
     task_id: str, materials: list, request_id: str
 ) -> tuple[list, int]:
@@ -720,6 +824,13 @@ def delete_video(request: Request, task_id: str = Path(..., description="Task ID
     "/musics", response_model=BgmRetrieveResponse, summary="Retrieve local BGM files"
 )
 def get_bgm_list(request: Request):
+    # Which of these "random" can actually draw from. Uploads stay in the list
+    # because picking one by name is the whole point of the upload button, but
+    # the form has to be able to say how many tracks the draw sees - otherwise
+    # "one of N is picked per render" counts tracks that can never come up.
+    # Compared by resolved path rather than by name: an upload sharing a name
+    # with a bundled track shadows it in this list, and is not bundled.
+    bundled_paths = set(bgm_service.bundled_bgm_files())
     bgm_list = []
     for file in bgm_service.list_bgm_files():
         filename = os.path.basename(file)
@@ -733,6 +844,7 @@ def get_bgm_list(request: Request):
                 # 只返回文件名，避免把服务器绝对路径暴露给调用方。服务端会
                 # 在 storage/bgm 和 resource/songs 两个白名单目录中重新解析。
                 "file": filename,
+                "bundled": file in bundled_paths,
             }
         )
     response = {"files": bgm_list}
@@ -781,6 +893,52 @@ def upload_bgm_file(request: Request, file: UploadFile = File(...)):
 
     response = {"file": safe_filename}
     return utils.get_response(200, response)
+
+
+@router.delete(
+    "/musics/{file_name}",
+    response_model=TaskDeletionResponse,
+    summary="Delete an uploaded background music track",
+)
+def delete_bgm_file(
+    request: Request, file_name: str = Path(..., description="Stored file name")
+):
+    """
+    Remove one track the user uploaded.
+
+    Resolved against the uploads directory alone. The bundled library is an
+    application resource - read-only under an MSIX install - so a route that
+    could reach it would be offering to delete part of the package. A name
+    present in both places removes the upload, which is the one the picker was
+    showing anyway.
+
+    Until this existed an upload stayed in the library for good, and the only
+    way to take one back out was File Explorer.
+    """
+    request_id = base.get_task_id(request)
+    try:
+        # Reuses the upload-side rules: a bare filename with a supported
+        # extension, and never one of the in-flight staging files, which a
+        # delete would otherwise pull out from under a validation in progress.
+        safe_name = bgm_service.sanitize_upload_filename(file_name)
+    except bgm_service.BgmUploadError as exc:
+        logger.warning(
+            f"reject music delete, request_id: {request_id}, "
+            f"file: {file_name}, error: {str(exc)}"
+        )
+        raise HttpException(
+            task_id=request_id,
+            status_code=403,
+            message=f"{request_id}: invalid music file",
+        ) from exc
+
+    uploads_dir = bgm_service.uploaded_bgm_dir(create=True)
+    file_path = _resolve_path_within_directory(uploads_dir, safe_name, request_id)
+    os.remove(file_path)
+
+    logger.success(f"background music upload deleted: {os.path.basename(file_path)}")
+    return utils.get_response(200)
+
 
 @router.get(
     "/video_materials", response_model=VideoMaterialRetrieveResponse, summary="Retrieve local video materials"

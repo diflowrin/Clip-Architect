@@ -70,7 +70,7 @@ class VideoParams(BaseModel):
       "video_aspect": "横屏 16:9（西瓜视频）",
       "voice_name": "女生-晓晓",
       "bgm_name": "random",
-      "font_name": "BeVietnamPro-Bold.ttf",
+      "font_name": "NotoSans-Bold.ttf",
       "text_color": "#FFFFFF",
       "font_size": 60,
       "stroke_color": "#000000",
@@ -133,7 +133,7 @@ class VideoParams(BaseModel):
         "subtitle_position", "bottom"
     )  # top, bottom, center, custom
     custom_position: float = config.ui.get("custom_position", 70.0)
-    font_name: Optional[str] = "BeVietnamPro-Bold.ttf"
+    font_name: Optional[str] = "NotoSans-Bold.ttf"
     text_fore_color: Optional[str] = "#FFFFFF"
     text_background_color: Union[bool, str] = False
     rounded_subtitle_background: bool = False
@@ -157,7 +157,7 @@ class SubtitleRequest(BaseModel):
     bgm_file: Optional[str] = ""
     bgm_volume: Optional[float] = 0.2
     subtitle_position: Optional[str] = config.ui.get("subtitle_position", "bottom")
-    font_name: Optional[str] = "BeVietnamPro-Bold.ttf"
+    font_name: Optional[str] = "NotoSans-Bold.ttf"
     text_fore_color: Optional[str] = "#FFFFFF"
     text_background_color: Union[bool, str] = False
     rounded_subtitle_background: bool = False
@@ -197,6 +197,10 @@ class VideoScriptParams:
     # How long the script should take to read aloud. Zero keeps the old
     # behaviour for callers that never sent one: no budget, no trimming.
     video_duration: int = Field(default=0, ge=0, le=600)
+    # What the finished video will look like, so the script can be written for
+    # it. Optional, and empty means no hint at all rather than a guessed one:
+    # an older client that never sent it keeps the script it used to get.
+    video_aspect: Optional[str] = ""
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
 
@@ -291,6 +295,22 @@ class ReopenTaskRequest(BaseModel):
     materials: List[str] = []
 
 
+class MaterialSearchRequest(BaseModel):
+    """
+    在审阅界面用一个关键词换掉某一段素材。
+
+    ``exclude`` 是时间线上已有的片段路径，用于跳过重复候选；它只参与文件名
+    比较，不会被当作可读取的路径使用。``video_aspect`` 与 ``video_clip_duration``
+    保持和生成表单一致，否则换来的片段方向或时长与成片不匹配。
+    """
+
+    search_term: str = ""
+    video_source: Optional[str] = "pexels"
+    video_aspect: Optional[VideoAspect] = VideoAspect.portrait.value
+    video_clip_duration: int = Field(default=0, ge=0)
+    exclude: List[str] = []
+
+
 class VideoScriptRequest(VideoScriptParams, BaseModel):
     pass
 
@@ -382,8 +402,20 @@ class DownloadedMaterialListData(BaseModel):
     total_size: int
 
 
+class BgmFileData(FileData):
+    """
+    一条背景音乐条目。
+
+    ``bundled`` 表示该曲目随应用发布。只有这些曲目参与 "random" 抽取，
+    用户上传的曲目仍可按名字选择，因此表单需要这个标记才能说清
+    "每次渲染随机挑一首" 到底是从几首里挑。
+    """
+
+    bundled: bool = False
+
+
 class BgmRetrieveData(BaseModel):
-    files: List[FileData]
+    files: List[BgmFileData]
 
 
 class BgmUploadData(BaseModel):
@@ -563,6 +595,7 @@ class BgmRetrieveResponse(BaseResponse):
                             "name": "4fca18fce7344f3aa824777a40d45c8c.mp3",
                             "size": 1891269,
                             "file": "4fca18fce7344f3aa824777a40d45c8c.mp3",
+                            "bundled": True,
                         }
                     ]
                 },

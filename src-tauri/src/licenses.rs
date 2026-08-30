@@ -23,6 +23,7 @@ const DOCUMENTS: &[(&str, &str)] = &[
     ("FFMPEG-BUILD.txt", "FFmpeg - the build shipped here"),
     ("LGPL-3.0.txt", "GNU Lesser GPL v3"),
     ("LGPL-2.1.txt", "GNU Lesser GPL v2.1"),
+    ("OFL-1.1-NotoSans.txt", "Noto Sans - SIL OFL 1.1"),
     ("OFL-1.1-BeVietnamPro.txt", "Be Vietnam Pro - SIL OFL 1.1"),
     ("OFL-1.1-Charm.txt", "Charm - SIL OFL 1.1"),
     ("LICENSES-python.txt", "Python packages"),

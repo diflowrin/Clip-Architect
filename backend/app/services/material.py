@@ -4,7 +4,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, NamedTuple
 from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -1023,6 +1023,18 @@ def _keep_in_download_cache(video_path: str) -> None:
         )
 
 
+def downloaded_file_name(video_url: str) -> str:
+    """
+    The file name a remote clip is saved under, wherever it is saved.
+
+    Content-named, so the same clip fetched twice is one file. Knowing the
+    name before the download is what lets the keyword search skip a candidate
+    the timeline already holds instead of paying for it and then noticing.
+    """
+    url_without_query = video_url.split("?")[0]
+    return f"vid-{utils.md5(url_without_query)}.mp4"
+
+
 def save_video(video_url: str, save_dir: str = "") -> str:
     if not save_dir:
         save_dir = utils.storage_dir("cache_videos")
@@ -1030,10 +1042,7 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    url_without_query = video_url.split("?")[0]
-    url_hash = utils.md5(url_without_query)
-    video_id = f"vid-{url_hash}"
-    video_path = f"{save_dir}/{video_id}.mp4"
+    video_path = f"{save_dir}/{downloaded_file_name(video_url)}"
 
     # if video already exists, return the path
     if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
@@ -1591,6 +1600,181 @@ def _download_videos_by_script_order(
     logger.success(f"downloaded {len(video_paths)} ordered videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
+
+
+# The stock sources a keyword search can page through. WaveSpeed is absent on
+# purpose: it generates footage per call and bills for it, so "fetch me
+# another clip" would be a purchase rather than a search.
+SEARCHABLE_SOURCES: dict[str, Callable[..., List[MaterialInfo]]] = {
+    "pexels": search_videos_pexels,
+    "pixabay": search_videos_pixabay,
+    "coverr": search_videos_coverr,
+}
+
+# What a keyword search falls back to when the task was made from the user's
+# own uploads, or from a source that cannot be searched. Local footage has no
+# catalogue behind it, but wanting one stock clip in the middle of it is a
+# perfectly ordinary thing to ask for.
+DEFAULT_SEARCHABLE_SOURCE = "pexels"
+
+
+def _append_material_source(task_id: str, record: dict[str, Any]) -> None:
+    """
+    Add one clip to the task's source records, keeping the ones already there.
+
+    ``_persist_material_sources`` replaces the list, which is right after a
+    download loop that fetched the whole timeline and wrong for a single
+    replacement: writing just the new clip would erase the provenance of every
+    other one. Like the bulk path, a failure here is logged and swallowed -
+    the clip is on disk and usable, and the attribution note is not worth
+    failing the request over.
+    """
+    try:
+        manifest = task_artifacts.read_script_data(task_id) or {}
+        existing = manifest.get("material_sources")
+        existing = list(existing) if isinstance(existing, list) else []
+        existing.append(record)
+        task_artifacts.patch_script_data(task_id, material_sources=existing)
+    except Exception as exc:
+        logger.warning(
+            "failed to append material source record: "
+            f"task_id={task_id}, error={type(exc).__name__}, detail={exc}"
+        )
+
+
+class ReplacementClip(NamedTuple):
+    """Where a keyword search landed: the saved file, and who supplied it."""
+
+    path: str
+    provider: str
+
+
+def _first_unused_clip(
+    *,
+    task_id: str,
+    items: List[MaterialInfo],
+    taken: set[str],
+    save_dir: str,
+) -> str:
+    """
+    Download the first candidate the timeline has not already used.
+
+    Candidates are matched against ``taken`` by the name ``save_video`` would
+    give them, so a clip already on screen is skipped before it is fetched
+    rather than after - comparing afterwards would spend a request and a slice
+    of the provider quota to discover the clip was already there.
+    """
+    for item in items:
+        if downloaded_file_name(item.url).lower() in taken:
+            continue
+        try:
+            saved_video_path = save_video(video_url=item.url, save_dir=save_dir)
+        except Exception as e:
+            logger.error(
+                "failed to download replacement material: "
+                f"provider={item.provider}, error={type(e).__name__}, "
+                f"detail={_redact_request_error(e, item.url)}"
+            )
+            continue
+        if not saved_video_path:
+            continue
+
+        logger.success(f"replacement clip saved: {saved_video_path}")
+        try:
+            _append_material_source(
+                task_id, _material_source_record(item, saved_video_path)
+            )
+        except Exception as source_error:
+            logger.warning(
+                "failed to prepare replacement material source record: "
+                f"provider={item.provider}, "
+                f"error={type(source_error).__name__}, detail={source_error}"
+            )
+        return saved_video_path
+    return ""
+
+
+def search_replacement_video(
+    *,
+    task_id: str,
+    search_term: str,
+    source: str = DEFAULT_SEARCHABLE_SOURCE,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    max_clip_duration: int = 5,
+    exclude_paths: List[str] | None = None,
+    save_dir: str = "",
+) -> ReplacementClip:
+    """
+    Fetch one stock clip for a keyword, skipping the ones already used, and
+    report where it was saved and which provider supplied it.
+
+    This is the review screen swapping a single clip, not the download loop:
+    it stops at the first candidate that lands, and never touches the task
+    record - the caller owns the clip list, and the user has not approved the
+    swap until they render.
+
+    ``exclude_paths`` is everything the caller has already been shown, not
+    just what is on the timeline: a clip that was swapped away leaves the
+    list, and excluding only the list let the next press hand it straight back.
+    That is what makes "another clip" mean another clip.
+
+    One keyword on one provider is a shallow well - the search results are
+    cached for the day, so pressing the button walks down a list of a couple
+    of dozen, and a strict orientation match thins it further. Rather than
+    stopping there, an exhausted provider falls through to the other stock
+    sources that have a key configured. A provider with no key is skipped in
+    silence: the user asked for a clip, not for a lecture about a service
+    they never chose.
+
+    Returns an empty path when nothing is left anywhere. Missing credentials
+    for the *requested* provider still raise ``ValueError`` from
+    ``get_api_key``, which the caller turns into an answer the user can act on.
+    """
+    search_term = (search_term or "").strip()
+    if not search_term:
+        return ReplacementClip("", "")
+
+    requested = source if source in SEARCHABLE_SOURCES else DEFAULT_SEARCHABLE_SOURCE
+    fallbacks = [name for name in SEARCHABLE_SOURCES if name != requested]
+
+    taken = {
+        os.path.basename(str(path)).lower()
+        for path in (exclude_paths or [])
+        if isinstance(path, str) and path
+    }
+
+    for index, provider in enumerate([requested, *fallbacks]):
+        try:
+            items = _search_videos_with_cache(
+                provider=provider,
+                search_videos=SEARCHABLE_SOURCES[provider],
+                search_term=search_term,
+                minimum_duration=scene.minimum_material_duration(max_clip_duration),
+                video_aspect=video_aspect,
+            )
+        except ValueError:
+            # No key for this provider. On the one the user actually chose
+            # that is worth saying out loud; on a fallback it is not news.
+            if index == 0:
+                raise
+            continue
+
+        logger.info(
+            f"keyword search found {len(items)} videos for {search_term!r} "
+            f"on {provider}"
+        )
+        saved_video_path = _first_unused_clip(
+            task_id=task_id, items=items, taken=taken, save_dir=save_dir
+        )
+        if saved_video_path:
+            return ReplacementClip(saved_video_path, provider)
+
+        logger.info(
+            f"no unused clip left for {search_term!r} on {provider}: "
+            f"{len(items)} candidates, {len(taken)} already seen"
+        )
+
+    return ReplacementClip("", "")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import {
   TASK_STATE_COMPLETE,
   TASK_STATE_FAILED,
   TASK_STATE_PROCESSING,
+  type BgmFile,
   type DownloadedMaterial,
   type FileEntry,
   type MaterialInfo,
@@ -182,7 +183,7 @@ const DEFAULT_PARAMS: VideoParams = {
   subtitle_enabled: true,
   subtitle_position: 'bottom',
   custom_position: 70,
-  font_name: 'BeVietnamPro-Bold.ttf',
+  font_name: 'NotoSans-Bold.ttf',
   text_fore_color: '#FFFFFF',
   font_size: 60,
   stroke_color: '#000000',
@@ -286,7 +287,7 @@ export function GenerateView({
   // unreachable service all produce the same empty dropdown otherwise.
   const [voiceMessage, setVoiceMessage] = useState('');
   const [fonts, setFonts] = useState<string[]>([]);
-  const [bgmFiles, setBgmFiles] = useState<FileEntry[]>([]);
+  const [bgmFiles, setBgmFiles] = useState<BgmFile[]>([]);
   const [materials, setMaterials] = useState<FileEntry[]>([]);
   // Stock footage earlier renders downloaded, offered for reuse next to the
   // upload control: the file is already on disk, so using it again costs no
@@ -299,6 +300,8 @@ export function GenerateView({
   const [materialNames, setMaterialNames] = useState<Record<string, string>>({});
   const [uploading, setUploading] = useState(false);
   const [uploadingBgm, setUploadingBgm] = useState(false);
+  const [deletingBgm, setDeletingBgm] = useState(false);
+  const [confirmingBgmDelete, setConfirmingBgmDelete] = useState(false);
   const bgmInput = useRef<HTMLInputElement | null>(null);
 
   const [scriptBusy, setScriptBusy] = useState(false);
@@ -793,6 +796,7 @@ export function GenerateView({
         // Written to the same budget as a render would use, so the script the
         // button produces is the length the chips promised.
         video_duration: params.video_duration ?? 0,
+        video_aspect: params.video_aspect,
         video_script_prompt: params.video_script_prompt || '',
       });
       update('video_script', result.video_script);
@@ -935,6 +939,36 @@ export function GenerateView({
       report(cause);
     } finally {
       setUploadingBgm(false);
+    }
+  }
+
+  /** Remove one uploaded track from the music library.
+   *
+   *  Only uploads reach this: the bundled library is part of the installed
+   *  package, and the button is not offered for it. Until this existed an
+   *  upload stayed in the picker for good, which is how a voice-over recorded
+   *  for something else was still there weeks later. */
+  async function handleDeleteBgm(entry: BgmFile) {
+    setDeletingBgm(true);
+    setError(null);
+    try {
+      await api.deleteBgm(entry.file);
+      const refreshed = await api.listBgm();
+      setBgmFiles(refreshed.files);
+      // The selection pointed at the file that is now gone, so it has to move.
+      // Back to Random rather than to another track: it is the default, and
+      // picking a replacement on the user's behalf would be a guess.
+      setParams((previous) =>
+        previous.bgm_file === entry.file
+          ? { ...previous, bgm_type: 'random', bgm_file: '' }
+          : previous,
+      );
+      setNotice(`Removed ${entry.name} from your music.`);
+    } catch (cause) {
+      report(cause);
+    } finally {
+      setDeletingBgm(false);
+      setConfirmingBgmDelete(false);
     }
   }
 
@@ -1213,6 +1247,8 @@ export function GenerateView({
               matchedToScript={params.video_source !== 'local'}
               concatMode={params.video_concat_mode}
               aspect={params.video_aspect}
+              source={params.video_source}
+              clipDuration={params.video_clip_duration}
               renderError={error}
               onRender={(paths, keepOrder) => void handleRenderReviewed(paths, keepOrder)}
               onCancel={() => {
@@ -1268,6 +1304,18 @@ export function GenerateView({
   const matchedLength = lengthIdForParams(params);
   const activeLength = customLength ? CUSTOM_LENGTH_ID : matchedLength;
   const lengthSeconds = params.video_duration ?? 30;
+  // "Random" draws from the bundled tracks alone, so the two halves of the
+  // library are listed apart and counted apart. Lumping them together is what
+  // let a voice-over uploaded for one clip turn up as the soundtrack of an
+  // unrelated re-render, with the hint cheerfully counting it as a track.
+  const bundledBgm = bgmFiles.filter((entry) => entry.bundled);
+  const uploadedBgm = bgmFiles.filter((entry) => !entry.bundled);
+  // The track the picker is on, when it is one of the user's own. Only those
+  // can be removed - the bundled library is part of the installed package.
+  const selectedUpload =
+    params.bgm_type === 'file'
+      ? uploadedBgm.find((entry) => entry.file === params.bgm_file)
+      : undefined;
 
   return (
     <div className="form-page">
@@ -1879,6 +1927,10 @@ export function GenerateView({
               value={params.bgm_type === 'file' ? `file:${params.bgm_file}` : params.bgm_type}
               onChange={(event) => {
                 const value = event.target.value;
+                // A primed "Delete file" must not carry over to whatever is
+                // selected next: the button would then name a different track
+                // than the one the user armed it for.
+                setConfirmingBgmDelete(false);
                 if (value.startsWith('file:')) {
                   update('bgm_type', 'file');
                   update('bgm_file', value.slice('file:'.length));
@@ -1888,13 +1940,26 @@ export function GenerateView({
                 }
               }}
             >
-              <option value="random">Random</option>
+              <option value="random">Random (bundled tracks)</option>
               <option value="">None</option>
-              {bgmFiles.map((entry) => (
-                <option key={entry.file} value={`file:${entry.file}`}>
-                  {entry.name}
-                </option>
-              ))}
+              {bundledBgm.length > 0 && (
+                <optgroup label="Bundled with the app">
+                  {bundledBgm.map((entry) => (
+                    <option key={entry.file} value={`file:${entry.file}`}>
+                      {entry.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {uploadedBgm.length > 0 && (
+                <optgroup label="Your uploads">
+                  {uploadedBgm.map((entry) => (
+                    <option key={entry.file} value={`file:${entry.file}`}>
+                      {entry.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {params.bgm_type === 'file' && params.bgm_file && (
               <audio
@@ -1909,10 +1974,47 @@ export function GenerateView({
                 preload="none"
               />
             )}
-            {params.bgm_type === 'random' && bgmFiles.length > 0 && (
+            {selectedUpload && (
+              <div className="button-row" style={{ marginTop: 8 }}>
+                {confirmingBgmDelete ? (
+                  <>
+                    <button
+                      type="button"
+                      className="button button--danger"
+                      onClick={() => void handleDeleteBgm(selectedUpload)}
+                      disabled={deletingBgm}
+                    >
+                      {deletingBgm ? 'Removing…' : 'Delete file'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={() => setConfirmingBgmDelete(false)}
+                      disabled={deletingBgm}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => setConfirmingBgmDelete(true)}
+                  >
+                    Remove from my music
+                  </button>
+                )}
+                <span className="field__hint">
+                  Deletes the file. Videos already rendered with it keep their
+                  soundtrack.
+                </span>
+              </div>
+            )}
+            {params.bgm_type === 'random' && bundledBgm.length > 0 && (
               <span className="field__hint">
-                One of the {bgmFiles.length} tracks is picked per render. Choose
-                a track by name to hear it first.
+                One of the {bundledBgm.length} tracks that ship with the app is
+                picked per render{uploadedBgm.length > 0 && ', and your uploads are left out'}.
+                Choose a track by name to hear it first, or to use one of your own.
               </span>
             )}
 
@@ -1939,7 +2041,7 @@ export function GenerateView({
               <span className="field__hint">
                 MP3, M4A, AAC, WAV, FLAC, OGG, OPUS or WMA, up to 30 MB. Your
                 uploads are kept with the app and stay available for later
-                videos.
+                videos. Random never picks one, so choose it by name.
               </span>
             </div>
           </div>

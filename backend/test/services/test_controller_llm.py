@@ -39,6 +39,9 @@ class TestLlmController(unittest.TestCase):
             custom_system_prompt="Return narration only.",
             # 请求没有给时长，就不能凭空替调用方设一个词数预算。
             target_seconds=0,
+            # Nor a shape: an older client that never sent one keeps the script
+            # it used to get.
+            video_aspect="",
         )
 
     def test_generate_video_terms_forwards_order_matching_mode(self):
