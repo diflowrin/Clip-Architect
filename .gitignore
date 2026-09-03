@@ -111,3 +111,9 @@ plugins/impeccable-live.client.ts
 app/plugins/impeccable-live.client.ts
 src/plugins/impeccable-live.client.ts
 # impeccable-live-ignore-end
+
+# Link building and store-listing working files: submission kit, directory
+# tracker, screenshots and artwork. Nothing here ships, and some of it is
+# account and outreach material that is not for publication - so the whole
+# folder is ignored rather than each file being named.
+marketing/
