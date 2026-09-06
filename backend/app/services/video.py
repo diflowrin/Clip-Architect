@@ -1,4 +1,5 @@
 import itertools
+import hashlib
 import io
 import os
 import random
@@ -32,11 +33,13 @@ from app.models.schema import (
     MaterialInfo,
     VideoAspect,
     VideoConcatMode,
+    VideoFillMode,
     VideoParams,
     VideoTransitionMode,
 )
 from app.services import bgm as bgm_service
 from app.services import scene
+from app.services import subtitle_ass
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
@@ -138,42 +141,66 @@ def _prioritize_unique_source_clips(
     concat_mode: VideoConcatMode,
 ) -> List[SubClippedVideoClip]:
     """
-    优先让每个源素材只出现一次，降低成片里同一素材反复出现的概率。
+    Order the cut segments round-robin: the opening of every source, then the
+    second stretch of every source, and so on.
 
-    线上素材经常会遇到“一个长视频被切成多个短片段”的情况。旧逻辑在
-    random 模式下直接打乱所有短片段，导致同一个源视频的多个切片可能
-    分布在开头和中间，用户会感知为素材重复。本函数只调整片段顺序：
-    先放每个源文件里最长的一个片段，剩余片段作为兜底；当素材总时长不足时，
-    仍然允许后续片段补齐音频长度，避免破坏视频生成成功率。优先选择最长
-    片段是为了避免随机选中视频尾部的零碎短片段，导致明明有足够素材却过早复用。
+    A long stock clip is sliced into several segments, and the order they are
+    used in decides whether footage looks reused. The rule is one round per
+    segment index, so no source is drawn from twice until every source has been
+    drawn from once - and, just as importantly, a second visit to a source
+    lands on the stretch *after* the one already used rather than back at its
+    opening.
+
+    The previous ordering put one segment per source first and shuffled the
+    remainder behind it. That satisfied the first half of the rule and quietly
+    broke the second: with enough footage to cover the narration, the render
+    never reached the remainder at all, so nothing past the first few seconds
+    of any clip was ever seen. Whatever the user had downloaded, they got the
+    openings.
+
+    Segments are sorted by start time within each source so a round is a real
+    position in the footage. It also puts the short leftover at the end of a
+    file in the last round, where it belongs, instead of letting it win a
+    round it only entered because it was listed first.
+
+    Sequential mode keeps the order the sources were given in - that is what
+    the "keep my order" toggle asks for - and rounds through them in that
+    order. Random mode shuffles within each round, never across rounds.
     """
     if not subclipped_items:
         return []
 
-    concat_mode_value = getattr(concat_mode, "value", concat_mode)
-    if concat_mode_value != VideoConcatMode.random.value:
-        return subclipped_items
-
+    # dict preserves insertion order, which is the order the caller listed the
+    # files in; sequential mode depends on that.
     grouped_items: dict[str, list[SubClippedVideoClip]] = {}
     for item in subclipped_items:
         grouped_items.setdefault(item.source_file_path, []).append(item)
 
-    primary_items = []
-    overflow_items = []
     for items in grouped_items.values():
-        primary_item = max(items, key=lambda item: item.duration)
-        primary_items.append(primary_item)
-        overflow_items.extend(item for item in items if item is not primary_item)
+        items.sort(key=lambda item: item.start_time)
 
-    random.shuffle(primary_items)
-    random.shuffle(overflow_items)
+    concat_mode_value = getattr(concat_mode, "value", concat_mode)
+    shuffle_within_round = concat_mode_value == VideoConcatMode.random.value
+
+    ordered_items: list[SubClippedVideoClip] = []
+    round_count = max(len(items) for items in grouped_items.values())
+    for round_index in range(round_count):
+        round_items = [
+            items[round_index]
+            for items in grouped_items.values()
+            if round_index < len(items)
+        ]
+        if shuffle_within_round:
+            random.shuffle(round_items)
+        ordered_items.extend(round_items)
+
     logger.info(
-        "prioritized unique video materials, "
+        "ordered video materials round-robin, "
         f"sources: {len(grouped_items)}, "
-        f"primary clips: {len(primary_items)}, "
-        f"fallback clips: {len(overflow_items)}"
+        f"rounds: {round_count}, "
+        f"segments: {len(ordered_items)}"
     )
-    return primary_items + overflow_items
+    return ordered_items
 
 
 def get_ffmpeg_binary():
@@ -309,12 +336,45 @@ def _get_temp_audio_dir(output_dir: str) -> str:
     leaving the final MP4 at 0 bytes.  Using the system temp directory
     sidesteps the scan without changing behaviour on other platforms.
 
+    It cannot be the system temp directory itself. MoviePy names that file
+    after the output file - ``final-1.mp4`` becomes
+    ``final-1TEMP_MPY_wvf_snd.mp4`` - and every task writes a ``final-1.mp4``,
+    so two renders running at once landed on one path in one shared directory.
+    They then overwrote each other's narration mid-write, and whichever
+    finished first deleted the file the other was still reading. The symptoms
+    were a render that restarted near the end, a progress bar that fell back to
+    where that stage began, and - when both survived - a video carrying the
+    other task's audio. A per-output-directory subdirectory keeps the Defender
+    workaround and gives each task its own path; the two videos of a
+    ``video_count > 1`` task still differ by output name inside it.
+
     On Linux/macOS/Docker the output directory is returned unchanged so
     existing behaviour is preserved.
     """
-    if sys.platform == "win32":
+    if sys.platform != "win32":
+        return output_dir
+
+    # Hashed rather than pasted in: output_dir is a filesystem path, and its
+    # basename is only a task id by convention. The digest is always a legal
+    # directory name, and is stable so a task reuses one directory instead of
+    # leaving a new one behind on every render.
+    fingerprint = hashlib.sha1(
+        os.path.abspath(output_dir).encode("utf-8", "surrogatepass")
+    ).hexdigest()[:16]
+    temp_dir = os.path.join(tempfile.gettempdir(), "cliparchitect-render", fingerprint)
+    try:
+        os.makedirs(temp_dir, exist_ok=True)
+    except OSError as exc:
+        # A temp directory that cannot be created is not a reason to fail a
+        # render that is otherwise ready to write. The shared directory is the
+        # old behaviour: correct on its own, and only unsafe when a second
+        # render overlaps this one.
+        logger.warning(
+            f"cannot create a private temp audio directory ({str(exc)}), "
+            f"falling back to the shared one"
+        )
         return tempfile.gettempdir()
-    return output_dir
+    return temp_dir
 
 
 def _fallback_write_videofile(clip, output_file: str, failed_codec: str, reason: str, **kwargs):
@@ -344,6 +404,67 @@ _INTERMEDIATE_CLIP_BITRATE = "8M"
 _FINAL_VIDEO_BITRATE = "8M"
 
 
+# How hard the backdrop is blurred, as a fraction of the frame's long edge.
+# Tied to the frame rather than fixed so a 1080p and a 4K render look the same;
+# at 1920 it works out near 30, which is enough that no detail survives to
+# compete with the picture in front of it.
+_BACKDROP_BLUR_RATIO = 1 / 64
+
+# Blurring costs by area, and the backdrop is thrown away detail either way.
+# Shrinking before the blur and scaling back after is visually identical to
+# blurring at full size and a great deal cheaper.
+_BACKDROP_BLUR_DOWNSCALE = 8
+
+
+def _build_clip_fill_filters(
+    fill_mode: str | VideoFillMode | None,
+    width: int,
+    height: int,
+) -> str:
+    """
+    The filter graph that fits a clip of any shape into a ``width`` x ``height``
+    frame.
+
+    Three answers, because there is no single right one. ``crop`` fills the
+    frame by cutting the sides off, which is ideal until the subject is not
+    centred. ``bars`` is the honest, ugly one. ``blur`` puts a blurred, zoomed
+    copy of the clip behind itself: nothing of the source is lost and no part
+    of the frame is empty, which is why it is the default.
+    """
+    mode = getattr(fill_mode, "value", fill_mode) or VideoFillMode.blur.value
+
+    if mode == VideoFillMode.bars.value:
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        )
+
+    if mode == VideoFillMode.crop.value:
+        return (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height}"
+        )
+
+    if mode != VideoFillMode.blur.value:
+        logger.warning(f"unknown fill mode {mode!r}, using a blurred backdrop")
+
+    blur_width = max(2, int(width / _BACKDROP_BLUR_DOWNSCALE))
+    blur_height = max(2, int(height / _BACKDROP_BLUR_DOWNSCALE))
+    sigma = max(1.0, max(width, height) * _BACKDROP_BLUR_RATIO / _BACKDROP_BLUR_DOWNSCALE)
+    # The two branches read the same source: one cropped to fill and blurred,
+    # the other fitted whole, then laid over it.
+    return (
+        "split[ca_bg][ca_fg];"
+        f"[ca_bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},"
+        f"scale={blur_width}:{blur_height},"
+        f"gblur=sigma={sigma:.2f},"
+        f"scale={width}:{height}[ca_blurred];"
+        f"[ca_fg]scale={width}:{height}:force_original_aspect_ratio=decrease[ca_fitted];"
+        "[ca_blurred][ca_fitted]overlay=(W-w)/2:(H-h)/2"
+    )
+
+
 def _render_clip_with_ffmpeg(
     source_path: str,
     start_time: float,
@@ -354,6 +475,7 @@ def _render_clip_with_ffmpeg(
     codec: str,
     threads: int,
     clip_speed: float = 1.0,
+    fill_mode: str | VideoFillMode | None = None,
 ) -> bool:
     """
     Cut, letterbox and encode one clip in a single FFmpeg pass.
@@ -367,10 +489,7 @@ def _render_clip_with_ffmpeg(
     Returns False when FFmpeg is unavailable or rejects the job, so the caller
     can fall back to the MoviePy path rather than failing the render.
     """
-    filters = (
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
-    )
+    filters = _build_clip_fill_filters(fill_mode, width, height)
     if clip_speed and clip_speed != 1.0:
         # setpts scales presentation timestamps: a 2x clip has half the PTS
         # spacing. Applied before fps so the frame rate filter resamples the
@@ -719,6 +838,7 @@ def combine_videos(
     clip_speed: float = 1.0,
     progress_callback: Callable[[float], None] | None = None,
     target_duration: float | None = None,
+    fill_mode: str | VideoFillMode | None = None,
 ) -> str:
     """
     Build the silent cut of the video from the source material.
@@ -789,6 +909,14 @@ def combine_videos(
     processed_clips = []
     subclipped_items = []
     video_duration = 0
+    # Every source is sliced end to end, in both concat modes. Sequential used
+    # to stop after the first segment of each file, which left it with one
+    # scene per clip and no way to cover a narration longer than that: the
+    # shortfall was filled by replaying the segments already used, so a video
+    # made from five clips showed the same five openings over and over and
+    # never any of the footage behind them. Ordering is what the two modes
+    # disagree about, and _prioritize_unique_source_clips is where that
+    # belongs.
     for video_path in video_paths:
         clip = _open_video_clip_quietly(video_path)
         clip_duration = clip.duration
@@ -818,8 +946,6 @@ def combine_videos(
                 )
 
             start_time = end_time
-            if video_concat_mode.value == VideoConcatMode.sequential.value:
-                break
 
     subclipped_items = _prioritize_unique_source_clips(
         subclipped_items=subclipped_items,
@@ -841,31 +967,38 @@ def combine_videos(
         )
         
         clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
+        prefilled_file = f"{output_dir}/temp-prefill-{i+1}.mp4"
 
-        # Fast path: with no transition to apply, the whole clip - cut, letterbox
-        # and encode - is one FFmpeg invocation. Transitions need per-frame
-        # compositing, so those still go through MoviePy below.
+        # Cutting, fitting the clip to the frame, re-timing it and encoding it
+        # is one FFmpeg invocation either way. Without a transition that is the
+        # finished clip. With one, it is the input MoviePy composites the
+        # transition over - which is both faster than having MoviePy resize as
+        # well, and the only way a transition and a plain cut fill the frame
+        # the same way. The MoviePy branch below still fits the clip itself,
+        # because it is also the fallback for when FFmpeg cannot.
         wants_transition = transition_value not in (
             None,
             VideoTransitionMode.none.value,
         )
-        if not wants_transition:
-            requested_duration = min(
-                (subclipped_item.end_time - subclipped_item.start_time)
-                / (normalized_clip_speed or 1.0),
-                longest_scene,
-            )
-            if _render_clip_with_ffmpeg(
-                source_path=subclipped_item.file_path,
-                start_time=subclipped_item.start_time,
-                end_time=subclipped_item.end_time,
-                width=video_width,
-                height=video_height,
-                output_file=clip_file,
-                codec=_get_effective_video_codec(),
-                threads=threads,
-                clip_speed=normalized_clip_speed,
-            ):
+        requested_duration = min(
+            (subclipped_item.end_time - subclipped_item.start_time)
+            / (normalized_clip_speed or 1.0),
+            longest_scene,
+        )
+        prefilled_source = None
+        if _render_clip_with_ffmpeg(
+            source_path=subclipped_item.file_path,
+            start_time=subclipped_item.start_time,
+            end_time=subclipped_item.end_time,
+            width=video_width,
+            height=video_height,
+            output_file=clip_file if not wants_transition else prefilled_file,
+            codec=_get_effective_video_codec(),
+            threads=threads,
+            clip_speed=normalized_clip_speed,
+            fill_mode=fill_mode,
+        ):
+            if not wants_transition:
                 processed_clips.append(
                     SubClippedVideoClip(
                         file_path=clip_file,
@@ -886,16 +1019,21 @@ def combine_videos(
                     except Exception as exc:
                         logger.warning(f"progress callback failed: {str(exc)}")
                 continue
+            prefilled_source = prefilled_file
 
         try:
-            clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
-                subclipped_item.start_time, subclipped_item.end_time
-            )
-            # 播放速度属于素材本身属性，应在转场前应用。这样 Fade/Slide 等一秒转场
-            # 不会跟随素材速度变成 0.5 秒或 2 秒；后续最大时长裁剪继续作为
-            # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
-            if normalized_clip_speed != 1.0:
-                clip = clip.with_speed_scaled(normalized_clip_speed)
+            if prefilled_source is not None:
+                # Already cut, already the right shape, already re-timed.
+                clip = _open_video_clip_quietly(prefilled_source)
+            else:
+                clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
+                    subclipped_item.start_time, subclipped_item.end_time
+                )
+                # 播放速度属于素材本身属性，应在转场前应用。这样 Fade/Slide 等一秒转场
+                # 不会跟随素材速度变成 0.5 秒或 2 秒；后续最大时长裁剪继续作为
+                # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
+                if normalized_clip_speed != 1.0:
+                    clip = clip.with_speed_scaled(normalized_clip_speed)
             clip_duration = clip.duration
             # Not all videos are same size, so we need to resize them
             clip_w, clip_h = clip.size
@@ -964,6 +1102,11 @@ def combine_videos(
             # Store clip duration before closing
             clip_duration_saved = clip.duration
             close_clip(clip)
+            if prefilled_source is not None:
+                # The transition has been written to its own file; the input it
+                # was composited over is dead weight from here on, and there is
+                # one per clip in the cut.
+                delete_files(prefilled_source)
 
             processed_clips.append(
                 SubClippedVideoClip(
@@ -1325,6 +1468,395 @@ def subtitle_text_for_font(text: str, font_path: str) -> str:
     return "".join(_subtitle_char_for_font(char, font_path) for char in text)
 
 
+def _escape_ffmpeg_filter_path(file_path: str) -> str:
+    """
+    Quote a path so FFmpeg's filter parser reads it as one argument.
+
+    The parser strips a level of escaping inside the single quotes a filter
+    option is written in, so a Windows path arrives as a drive letter, a colon
+    it treats as an option separator, and backslashes it treats as escapes.
+    Forward slashes are accepted on Windows and avoid the second problem
+    entirely; the colon and any quote still have to be spelled out.
+    """
+    value = os.path.abspath(file_path).replace("\\", "/")
+    return value.replace(":", "\\:").replace("'", "\\'")
+
+
+def _subtitle_events_for_ass(
+    subtitle_path: str,
+    params: VideoParams,
+    font_path: str,
+    video_width: int,
+) -> list[subtitle_ass.SubtitleEvent]:
+    """
+    Read the SRT and measure each subtitle the way the MoviePy path measured it.
+
+    The wrapping and the box height are taken from the same helpers that drew
+    the old TextClips, so libass is handed the lines that were already being
+    drawn rather than breaking the text somewhere of its own choosing.
+    """
+    from app.services import subtitle as subtitle_service
+
+    background = params.text_background_color
+    if isinstance(background, bool):
+        background_color = "#000000" if background else None
+    else:
+        background_color = background or None
+
+    font_size = int(params.font_size)
+    stroke_width = float(params.stroke_width or 0)
+    max_width = video_width * 0.9
+    pad_x = int(font_size * 0.6) if background_color else 0
+    text_max_width = max(1, int(max_width) - 2 * pad_x)
+    interline = int(font_size * 0.25)
+    vertical_padding = int(font_size * 0.35)
+
+    events = []
+    for _index, times, text in subtitle_service.file_to_subtitles(subtitle_path):
+        if "-->" not in times:
+            continue
+        start_text, end_text = times.split("-->", 1)
+        try:
+            start = subtitle_ass.parse_srt_time(start_text)
+            end = subtitle_ass.parse_srt_time(end_text)
+        except ValueError as exc:
+            logger.warning(f"skipping a subtitle with an unreadable time: {str(exc)}")
+            continue
+        phrase = subtitle_text_for_font(text, font_path)
+        if not phrase.strip():
+            continue
+        wrapped_text, text_height = wrap_text(
+            phrase,
+            max_width=text_max_width,
+            font=font_path,
+            fontsize=font_size,
+        )
+        line_count = wrapped_text.count("\n") + 1
+        block_height = int(
+            text_height
+            + vertical_padding
+            + (interline * line_count)
+            + int(stroke_width * 2 * line_count)
+        )
+        # Measured on the line that sits lowest, because that is the one the
+        # bottom margin is counted from.
+        try:
+            pil_font = ImageFont.truetype(font_path, font_size)
+            ascent, _descent = pil_font.getmetrics()
+            descender = max(
+                0, int(pil_font.getbbox(wrapped_text.split(chr(10))[-1])[3] - ascent)
+            )
+        except Exception:
+            # Without it the subtitle still lands, just by the font's box
+            # rather than by its ink.
+            descender = 0
+        events.append(
+            subtitle_ass.SubtitleEvent(
+                start=start,
+                end=end,
+                text=wrapped_text,
+                text_height=int(text_height),
+                block_height=block_height,
+                descender=descender,
+            )
+        )
+    return events
+
+
+# The mix is assembled at one rate and layout regardless of what the sources
+# are. Edge TTS returns 24 kHz mono and the music is usually 44.1 kHz stereo,
+# and sidechaincompress refuses two inputs that do not agree.
+_MIX_AUDIO_FORMAT = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+
+# Ducking, as sidechaincompress arguments. The threshold is low because the
+# point is to react to speech being present at all rather than to compress its
+# dynamics; the ratio is what decides how far the music drops. Attack is short
+# enough to catch the start of a word, release long enough that the music does
+# not pump between them - a fast release is what makes ducking sound like a
+# broken gate rather than a mix.
+# Measured on a real narration over a bundled track: the threshold decides how
+# far the music drops far more than the ratio does. 0.03/8 gave 4.6 dB, which is
+# barely audible; 0.01/20 gave 13.6 dB, at which the music may as well not be
+# there. These land on 7.7 dB, inside the 6-10 dB a music bed under a voice is
+# normally mixed at.
+_DUCKING_THRESHOLD = 0.02
+_DUCKING_RATIO = 12
+_DUCKING_ATTACK_MS = 20
+_DUCKING_RELEASE_MS = 300
+
+
+def _build_final_audio_filters(
+    voice_index: int | None,
+    bgm_index: int | None,
+    voice_volume: float,
+    bgm_volume: float,
+    video_duration: float,
+    duck_music: bool = False,
+) -> tuple[list[str], str | None]:
+    """
+    Reproduce the MoviePy audio mix as an FFmpeg filter chain, optionally
+    ducking the music under the narration.
+
+    Two details decide whether the un-ducked mix sounds the same as before.
+    ``amix`` averages its inputs by default while ``CompositeAudioClip`` sums
+    them, so a mix without ``normalize=0`` arrives at half volume. And the
+    narration is padded rather than left to run out: the finished video is as
+    long as the picture, so letting the shorter stream end the output would
+    truncate the video to the length of the voice.
+
+    Ducking keys off the narration itself rather than off the subtitle
+    timings, so it follows the pauses inside a sentence and not just the gaps
+    between them. The key is taken after the voice's own volume is applied,
+    which is what the listener hears and therefore what should decide how far
+    the music gets out of its way.
+    """
+    filters = []
+    labels = []
+    wants_ducking = duck_music and voice_index is not None and bgm_index is not None
+
+    if voice_index is not None:
+        chain = (
+            f"[{voice_index}:a]{_MIX_AUDIO_FORMAT},"
+            f"volume={voice_volume:.4f},apad"
+        )
+        if wants_ducking:
+            # The padding is inside the split on purpose: once the narration
+            # ends, the key goes silent and the music comes back up.
+            filters.append(chain + ",asplit=2[voice][duckkey]")
+        else:
+            filters.append(chain + "[voice]")
+        labels.append("[voice]")
+
+    if bgm_index is not None:
+        fade_start = max(0.0, float(video_duration) - 3.0)
+        filters.append(
+            f"[{bgm_index}:a]{_MIX_AUDIO_FORMAT},"
+            f"volume={bgm_volume:.4f},"
+            f"afade=t=out:st={fade_start:.3f}:d=3"
+            + ("[musicbed]" if wants_ducking else "[music]")
+        )
+        if wants_ducking:
+            filters.append(
+                "[musicbed][duckkey]sidechaincompress="
+                f"threshold={_DUCKING_THRESHOLD}:"
+                f"ratio={_DUCKING_RATIO}:"
+                f"attack={_DUCKING_ATTACK_MS}:"
+                f"release={_DUCKING_RELEASE_MS}:"
+                "makeup=1[music]"
+            )
+        labels.append("[music]")
+
+    if not labels:
+        return [], None
+    if len(labels) == 1:
+        # One source still needs a named output for -map to point at.
+        filters[-1] = filters[-1].replace(labels[0], "[aout]")
+        return filters, "[aout]"
+    filters.append(
+        "".join(labels) + "amix=inputs=2:duration=longest:normalize=0[aout]"
+    )
+    return filters, "[aout]"
+
+
+def _run_ffmpeg_reporting_progress(
+    command: list[str],
+    total_duration: float,
+    progress_callback: Callable[[float], None] | None,
+) -> tuple[int, str]:
+    """
+    Run FFmpeg, turning its ``-progress`` stream into a 0.0-1.0 fraction.
+
+    This stage owns the last quarter of the bar and runs for as long as the
+    encode takes, so it has to report like the two before it - a stage that
+    only moves when it finishes reads as a hung task, which this project has
+    had to rediscover more than once.
+    """
+    if progress_callback is None:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        return result.returncode, (result.stderr or result.stdout or "")
+
+    # -progress writes machine-readable key=value lines; -nostats silences the
+    # human-readable bar that would otherwise interleave with them on stderr.
+    command = command[:1] + ["-progress", "pipe:1", "-nostats"] + command[1:]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        for line in process.stdout:
+            key, separator, value = line.strip().partition("=")
+            if separator and key == "out_time_us" and total_duration > 0:
+                try:
+                    seconds = int(value) / 1_000_000
+                except ValueError:
+                    # "N/A" arrives before the first frame is written.
+                    continue
+                try:
+                    progress_callback(min(max(seconds / total_duration, 0.0), 1.0))
+                except Exception as exc:
+                    # Reporting must never be able to fail a render.
+                    logger.warning(f"video progress callback failed: {str(exc)}")
+    finally:
+        if process.stdout:
+            process.stdout.close()
+        stderr = process.stderr.read() if process.stderr else ""
+        if process.stderr:
+            process.stderr.close()
+        process.wait()
+    return process.returncode, stderr
+
+
+def _render_final_with_ffmpeg(
+    video_path: str,
+    audio_path: str,
+    subtitle_path: str,
+    output_file: str,
+    params: VideoParams,
+    bgm_file: str,
+    loop_bgm: bool,
+    video_duration: float,
+    font_path: str,
+    video_width: int,
+    video_height: int,
+    progress_callback: Callable[[float], None] | None = None,
+) -> bool:
+    """
+    Burn the subtitles and mix the audio in one FFmpeg pass.
+
+    The MoviePy path this replaces generates every frame in Python to composite
+    a handful of text clips over it: measured on a nine-second video, 115
+    seconds against 17 - and the 17 is the encode, which has to happen either
+    way. libass costs nothing detectable next to it.
+
+    Returns False rather than raising when anything about the job cannot be
+    done here, so the caller can fall back to the path that can.
+    """
+    output_dir = os.path.dirname(output_file)
+    ass_path = os.path.join(output_dir, "subtitle.ass")
+
+    wants_subtitles = bool(
+        params.subtitle_enabled and subtitle_path and os.path.exists(subtitle_path)
+    )
+    if wants_subtitles:
+        try:
+            events = _subtitle_events_for_ass(
+                subtitle_path, params, font_path, video_width
+            )
+        except Exception as exc:
+            logger.warning(f"cannot measure subtitles for ASS, using moviepy: {str(exc)}")
+            return False
+        if not events:
+            wants_subtitles = False
+        else:
+            try:
+                subtitle_ass.build(
+                    events,
+                    ass_path,
+                    params=params,
+                    video_width=video_width,
+                    video_height=video_height,
+                    font_path=font_path,
+                )
+            except Exception as exc:
+                logger.warning(f"cannot write the ASS file, using moviepy: {str(exc)}")
+                return False
+
+    command = [utils.get_ffmpeg_binary(), "-y", "-hide_banner", "-loglevel", "error"]
+    command += ["-i", video_path]
+
+    next_index = 1
+    voice_index = None
+    bgm_index = None
+    if audio_path:
+        command += ["-i", audio_path]
+        voice_index = next_index
+        next_index += 1
+    if bgm_file:
+        if loop_bgm:
+            # Looping at the input keeps the mix simple: the music is then
+            # never the stream that decides how long the output runs.
+            command += ["-stream_loop", "-1"]
+        command += ["-i", bgm_file]
+        bgm_index = next_index
+        next_index += 1
+
+    filters = []
+    if wants_subtitles:
+        filters.append(
+            "[0:v]subtitles='{ass}':fontsdir='{fonts}'[v]".format(
+                ass=_escape_ffmpeg_filter_path(ass_path),
+                fonts=_escape_ffmpeg_filter_path(utils.font_dir()),
+            )
+        )
+        video_label = "[v]"
+    else:
+        video_label = "0:v"
+
+    audio_filters, audio_label = _build_final_audio_filters(
+        voice_index=voice_index,
+        bgm_index=bgm_index,
+        voice_volume=float(params.voice_volume or 1.0),
+        bgm_volume=float(params.bgm_volume or 0.0),
+        video_duration=video_duration,
+        duck_music=bool(getattr(params, "bgm_ducking", True)),
+    )
+    filters.extend(audio_filters)
+
+    if filters:
+        command += ["-filter_complex", ";".join(filters)]
+    command += ["-map", video_label]
+    if audio_label:
+        command += ["-map", audio_label]
+        # Stated rather than inherited from the narration. Edge TTS hands back
+        # 24 kHz mono, and a video whose soundtrack is the raw TTS stream is
+        # not what this pipeline shipped before: MoviePy resampled to CD rate
+        # and stereo, and some platforms resample a mono 24 kHz track again on
+        # upload rather than leaving it alone.
+        command += [
+            "-c:a", audio_codec,
+            "-b:a", audio_bitrate,
+            "-ar", "44100",
+            "-ac", "2",
+        ]
+    else:
+        command += ["-an"]
+
+    command += [
+        "-c:v", _get_effective_video_codec(),
+        "-b:v", _FINAL_VIDEO_BITRATE,
+        "-pix_fmt", "yuv420p",
+        "-r", str(fps),
+        "-threads", str(params.n_threads or 2),
+        # The picture decides the length. Both audio inputs are padded or
+        # looped past it, so this is what stops the output at the last frame.
+        "-shortest",
+        output_file,
+    ]
+
+    try:
+        return_code, error_output = _run_ffmpeg_reporting_progress(
+            command, video_duration, progress_callback
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning(f"ffmpeg final render failed to start, using moviepy: {str(exc)}")
+        return False
+
+    if return_code != 0:
+        logger.warning(
+            f"ffmpeg final render failed, using moviepy: {error_output.strip()[:400]}"
+        )
+        return False
+    if not os.path.exists(output_file) or os.path.getsize(output_file) == 0:
+        logger.warning("ffmpeg final render produced no output, using moviepy")
+        return False
+
+    logger.info("final video rendered with ffmpeg")
+    return True
+
+
 def generate_video(
     video_path: str,
     audio_path: str,
@@ -1370,6 +1902,60 @@ def generate_video(
             font_path = font_path.replace("\\", "/")
 
         logger.info(f"  ⑤ font: {font_path}")
+
+    # Fast path: libass draws the subtitles inside FFmpeg's own filter graph and
+    # the audio is mixed in the same pass, so the stage costs what the encode
+    # costs and nothing more. Measured on a nine-second cut: 17 seconds against
+    # the 115 the compositing below took. Everything after this point is the
+    # path for what ASS cannot draw, and the fallback when FFmpeg cannot run.
+    can_use_ass, ass_blocker = subtitle_ass.supports(params)
+    if not can_use_ass:
+        logger.info(f"rendering the final video with moviepy: {ass_blocker}")
+        if getattr(params, "bgm_ducking", True) and audio_path and params.bgm_type:
+            # The MoviePy mix applies one volume for the whole track. Saying so
+            # beats leaving someone to wonder why this render sounds different
+            # from the last one.
+            logger.warning(
+                "music ducking is not applied on the moviepy path; the music "
+                "stays at a constant level for this render"
+            )
+    else:
+        bgm_enabled = bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+        fast_bgm_file = ""
+        if bgm_enabled:
+            fast_bgm_file = (
+                bgm_file_override
+                if bgm_file_override is not None
+                else get_bgm_file(bgm_type=params.bgm_type, bgm_file=params.bgm_file)
+            )
+        # The picture decides how long the output runs, and the music fade is
+        # placed three seconds before its end, so the length has to be read
+        # before the command is built rather than trusted from the caller.
+        try:
+            probe_clip = _open_video_clip_quietly(video_path)
+            source_duration = float(probe_clip.duration or 0)
+            close_clip(probe_clip)
+        except Exception as exc:
+            logger.warning(f"cannot read the cut's duration, using moviepy: {str(exc)}")
+            source_duration = 0.0
+
+        if source_duration > 0 and _render_final_with_ffmpeg(
+            video_path=video_path,
+            audio_path=audio_path,
+            subtitle_path=subtitle_path,
+            output_file=output_file,
+            params=params,
+            bgm_file=fast_bgm_file,
+            loop_bgm=bgm_file_override is None,
+            video_duration=source_duration,
+            font_path=font_path,
+            video_width=video_width,
+            video_height=video_height,
+            progress_callback=progress_callback,
+        ):
+            # A failure inside the single pass takes the music down with it, so
+            # reaching here means the mix that was asked for is in the file.
+            return True
 
     def resolve_subtitle_background_color():
         # 兼容历史参数：API 里 `text_background_color` 既可能是布尔值，

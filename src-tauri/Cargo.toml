@@ -1,6 +1,6 @@
 [package]
 name = "clip-architect"
-version = "0.2.0"
+version = "0.2.1"
 description = "Desktop shell for the ClipArchitect short-video generator."
 authors = ["ClipArchitect"]
 license = "MIT"

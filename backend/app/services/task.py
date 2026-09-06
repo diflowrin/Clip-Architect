@@ -1029,6 +1029,7 @@ def generate_final_videos(
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
+            fill_mode=params.video_fill_mode,
             progress_callback=report_combine_progress,
             # Only read when there is no narration file to measure instead.
             target_duration=audio_duration,

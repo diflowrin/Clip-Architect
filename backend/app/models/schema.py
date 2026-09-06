@@ -31,6 +31,25 @@ class VideoTransitionMode(str, Enum):
     zoom_out = "ZoomOut"
 
 
+class VideoFillMode(str, Enum):
+    """
+    What fills the frame when a clip's shape does not match the video's.
+
+    Stock footage is mostly landscape and most of what this app makes is
+    vertical, so this decides what the majority of finished videos look like
+    either side of the picture.
+    """
+
+    # A blurred, zoomed copy of the clip itself behind it. Nothing of the
+    # source is lost and nothing is left empty, which is why it is the default.
+    blur = "blur"
+    # Fill the frame completely by cutting the sides off. Better when the
+    # subject is centred, bad when it is not, and nothing can tell in advance.
+    crop = "crop"
+    # Black bars. What every render did before this setting existed.
+    bars = "bars"
+
+
 class VideoAspect(str, Enum):
     landscape = "16:9"
     portrait = "9:16"
@@ -90,6 +109,12 @@ class VideoParams(BaseModel):
     # a video downloads. A positive value pins every scene to that length.
     video_clip_duration: int = Field(default=0, ge=0)
     video_clip_speed: Optional[float] = 1.0
+    # How a clip that is not the video's shape fills the frame. Defaults to a
+    # blurred backdrop: black bars are the most visible sign of footage that
+    # was never framed for the format it ended up in. An older project has no
+    # value recorded and so re-renders with the blur too - the setting is on
+    # the form for anyone who wants the bars back.
+    video_fill_mode: Optional[VideoFillMode] = VideoFillMode.blur.value
     match_materials_to_script: bool = False
     video_count: int = Field(default=1, ge=1)
     # How long the finished video should run, in seconds.
@@ -123,6 +148,11 @@ class VideoParams(BaseModel):
     bgm_type: Optional[str] = "random"
     bgm_file: Optional[str] = ""
     bgm_volume: Optional[float] = 0.2
+    # Pull the music down while the narrator speaks and let it back up in the
+    # gaps. Without it `bgm_volume` has to be set low enough to stay out of the
+    # way of the voice, which leaves the music inaudible everywhere else.
+    # Only ever applies when there is both a narration and music.
+    bgm_ducking: Optional[bool] = True
     # 视频配乐供应商共用提示词，WebUI 新任务统一写入该字段。保留下面的
     # Sonilo 专用字段以兼容旧任务记录和现有 CLI 参数。
     video_music_prompt: str = Field(default="", max_length=2000)

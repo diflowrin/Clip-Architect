@@ -6,6 +6,7 @@ import { useBackend } from './lib/useBackend';
 import { GenerateView, type RenderActivity } from './views/GenerateView';
 import { LibraryView } from './views/LibraryView';
 import { SettingsView } from './views/SettingsView';
+import { SeoArchitectSidebarLink } from './components/SeoArchitectPromo';
 
 type Tab = 'generate' | 'library' | 'settings';
 
@@ -43,7 +44,7 @@ export default function App() {
       <nav className="sidebar">
         <div className="sidebar__brand">
           <span className="sidebar__brand-name">Clip Architect</span>
-          <span className="sidebar__brand-version">0.2.0</span>
+          <span className="sidebar__brand-version">0.2.1</span>
         </div>
 
         {TABS.map((entry) => (
@@ -62,6 +63,12 @@ export default function App() {
         ))}
 
         {render && <RenderStatus render={render} onOpen={() => setTab('generate')} />}
+
+        {/* `margin-top: auto` on this block claims the gap between the tabs
+            and the footer, so both sit at the bottom of the column and the
+            empty middle of the sidebar carries something. The footer keeps its
+            own rule, which is what separates the two. */}
+        <SeoArchitectSidebarLink />
 
         {/* The footer used to say "running" unconditionally, from a status
             published once at startup. It now reflects the last request that

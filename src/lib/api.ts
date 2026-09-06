@@ -14,6 +14,9 @@ export const TASK_STATE_PROCESSING: TaskState = 4;
 
 export type VideoAspect = '16:9' | '9:16' | '1:1';
 export type VideoConcatMode = 'random' | 'sequential';
+/** What fills the frame when a clip is not the video's shape. */
+export type VideoFillMode = 'blur' | 'crop' | 'bars';
+
 export type VideoTransitionMode =
   | 'Shuffle'
   | 'FadeIn'
@@ -44,6 +47,7 @@ export interface VideoParams {
    *  draws 5, 10 or 15 seconds. A positive value pins them all to it. */
   video_clip_duration?: number;
   video_clip_speed?: number;
+  video_fill_mode?: VideoFillMode;
   match_materials_to_script?: boolean;
   video_count?: number;
   /** How long the finished video should run, in seconds.
@@ -63,6 +67,7 @@ export interface VideoParams {
   bgm_type?: string;
   bgm_file?: string;
   bgm_volume?: number;
+  bgm_ducking?: boolean;
   subtitle_enabled?: boolean;
   subtitle_position?: 'top' | 'bottom' | 'center' | 'custom';
   custom_position?: number;

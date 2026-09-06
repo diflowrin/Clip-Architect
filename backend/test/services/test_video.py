@@ -1282,6 +1282,155 @@ class TestVideoService(unittest.TestCase):
             clip for clip in ordered_clips if clip.source_file_path == "a.mp4"
         )
         self.assertEqual(first_a_clip, full_clip)
+
+    def test_prioritize_unique_source_clips_advances_past_each_opening(self):
+        """
+        A second visit to a source must land on the stretch after the one
+        already used. Ordering every opening first and shuffling the rest
+        behind it meant that a render with enough footage to cover the
+        narration stopped before the remainder and never showed anything past
+        the first few seconds of any clip.
+        """
+        clips = [
+            vd.SubClippedVideoClip("a.mp4", 0, 5, source_file_path="a.mp4"),
+            vd.SubClippedVideoClip("a.mp4", 5, 10, source_file_path="a.mp4"),
+            vd.SubClippedVideoClip("a.mp4", 10, 15, source_file_path="a.mp4"),
+            vd.SubClippedVideoClip("b.mp4", 0, 5, source_file_path="b.mp4"),
+            vd.SubClippedVideoClip("b.mp4", 5, 10, source_file_path="b.mp4"),
+            vd.SubClippedVideoClip("b.mp4", 10, 15, source_file_path="b.mp4"),
+        ]
+
+        ordered_clips = vd._prioritize_unique_source_clips(
+            subclipped_items=clips,
+            concat_mode=vd.VideoConcatMode.random,
+        )
+
+        self.assertCountEqual(ordered_clips, clips)
+        # One round per segment index: both openings, then both second
+        # stretches, then both third.
+        rounds = [ordered_clips[0:2], ordered_clips[2:4], ordered_clips[4:6]]
+        for round_index, round_clips in enumerate(rounds):
+            expected_start = round_index * 5
+            self.assertCountEqual(
+                [clip.source_file_path for clip in round_clips],
+                ["a.mp4", "b.mp4"],
+            )
+            for clip in round_clips:
+                self.assertEqual(clip.start_time, expected_start)
+
+    def test_prioritize_unique_source_clips_sequential_rounds_in_file_order(self):
+        """
+        "Keep my order" asks for the sources in the order they were given.
+        It does not ask for only their openings: the segments behind them are
+        reached in later rounds, in that same order.
+        """
+        clips = [
+            vd.SubClippedVideoClip("a.mp4", 0, 5, source_file_path="a.mp4"),
+            vd.SubClippedVideoClip("a.mp4", 5, 10, source_file_path="a.mp4"),
+            vd.SubClippedVideoClip("b.mp4", 0, 5, source_file_path="b.mp4"),
+            vd.SubClippedVideoClip("b.mp4", 5, 10, source_file_path="b.mp4"),
+        ]
+
+        ordered_clips = vd._prioritize_unique_source_clips(
+            subclipped_items=clips,
+            concat_mode=vd.VideoConcatMode.sequential,
+        )
+
+        self.assertEqual(
+            [(clip.source_file_path, clip.start_time) for clip in ordered_clips],
+            [("a.mp4", 0), ("b.mp4", 0), ("a.mp4", 5), ("b.mp4", 5)],
+        )
+
+    def test_prioritize_unique_source_clips_leaves_short_tail_for_last(self):
+        """
+        The leftover at the end of a file is shorter than a scene. It belongs
+        in the last round rather than winning a round it only entered because
+        the caller happened to list it first.
+        """
+        tail = vd.SubClippedVideoClip("a.mp4", 5, 6, source_file_path="a.mp4")
+        opening = vd.SubClippedVideoClip("a.mp4", 0, 5, source_file_path="a.mp4")
+
+        ordered_clips = vd._prioritize_unique_source_clips(
+            subclipped_items=[tail, opening],
+            concat_mode=vd.VideoConcatMode.sequential,
+        )
+
+        self.assertEqual(ordered_clips, [opening, tail])
+
+    def test_combine_videos_sequential_never_replays_an_unused_stretch(self):
+        """
+        Sequential used to stop slicing after the first segment of each file,
+        so a narration longer than one scene per clip was covered by replaying
+        the openings already used. Five clips became the same five openings on
+        a loop, and nothing behind them was ever seen.
+        """
+        used_ranges = []
+
+        class _FakeAudioClip:
+            duration = 45.0
+
+            def close(self):
+                pass
+
+        class _FakeVideoClip:
+            def __init__(self, duration, source_path=None):
+                self.duration = duration
+                self.size = (1080, 1920)
+                self.w = 1080
+                self.h = 1920
+                self.source_path = source_path
+
+            def subclipped(self, start_time, end_time):
+                if self.source_path is not None:
+                    used_ranges.append((self.source_path, start_time, end_time))
+                return _FakeVideoClip(end_time - start_time)
+
+            def close(self):
+                pass
+
+        video_paths = ["clip1.mp4", "clip2.mp4", "clip3.mp4"]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(vd, "AudioFileClip", return_value=_FakeAudioClip()),
+                patch.object(
+                    vd,
+                    "_open_video_clip_quietly",
+                    side_effect=lambda path: _FakeVideoClip(20.0, source_path=path),
+                ),
+                # Force the MoviePy branch: the fast path shells out to FFmpeg,
+                # which has no real file to read here.
+                patch.object(vd, "_render_clip_with_ffmpeg", return_value=False),
+                patch.object(vd, "_write_videofile_with_codec_fallback"),
+                patch.object(vd, "concat_video_clips_with_ffmpeg"),
+                patch.object(vd, "delete_files"),
+            ):
+                vd.combine_videos(
+                    combined_video_path=os.path.join(temp_dir, "combined.mp4"),
+                    video_paths=video_paths,
+                    audio_file="audio.mp3",
+                    video_concat_mode=vd.VideoConcatMode.sequential,
+                    max_clip_duration=5,
+                )
+
+        self.assertEqual(
+            len(used_ranges),
+            len(set(used_ranges)),
+            f"a stretch was used twice while others went unused: {used_ranges}",
+        )
+        # The order asked for, rounded through: every opening, then every
+        # second stretch, and so on.
+        self.assertEqual(
+            used_ranges[:6],
+            [
+                ("clip1.mp4", 0, 5),
+                ("clip2.mp4", 0, 5),
+                ("clip3.mp4", 0, 5),
+                ("clip1.mp4", 5, 10),
+                ("clip2.mp4", 5, 10),
+                ("clip3.mp4", 5, 10),
+            ],
+        )
     
     def test_wrap_text(self):
         """test text wrapping function"""
@@ -1531,10 +1680,24 @@ class TestVideoService(unittest.TestCase):
         finally:
             clip.close()
 
-    def test_get_temp_audio_dir_returns_system_temp_on_windows(self):
+    def test_get_temp_audio_dir_stays_under_system_temp_on_windows(self):
+        """
+        Still under the system temp directory - that is what keeps Windows
+        Defender from locking the file - but no longer the shared directory
+        itself, which two concurrent renders collided in.
+        """
         with patch("sys.platform", "win32"):
             result = vd._get_temp_audio_dir("/some/output/dir")
-            self.assertEqual(result, tempfile.gettempdir())
+
+        self.assertTrue(
+            os.path.abspath(result).startswith(
+                os.path.abspath(tempfile.gettempdir())
+            ),
+            f"{result} is not under {tempfile.gettempdir()}",
+        )
+        self.assertNotEqual(
+            os.path.abspath(result), os.path.abspath(tempfile.gettempdir())
+        )
 
     def test_get_temp_audio_dir_returns_output_dir_on_non_windows(self):
         for platform in ("linux", "darwin"):
@@ -1542,6 +1705,237 @@ class TestVideoService(unittest.TestCase):
                 with patch("sys.platform", platform):
                     result = vd._get_temp_audio_dir("/some/output/dir")
                     self.assertEqual(result, "/some/output/dir")
+
+
+class TestMusicDucking(unittest.TestCase):
+    """
+    Pulling the music down while the narrator speaks. Without it `bgm_volume`
+    has to be low enough to stay out of the way of the voice everywhere, which
+    leaves the music inaudible in the gaps where it was supposed to be heard.
+    """
+
+    def _graph(self, **kwargs):
+        options = {
+            "voice_index": 1,
+            "bgm_index": 2,
+            "voice_volume": 1.0,
+            "bgm_volume": 0.2,
+            "video_duration": 40.0,
+        }
+        options.update(kwargs)
+        return ";".join(vd._build_final_audio_filters(**options)[0])
+
+    def test_the_narration_keys_the_compressor(self):
+        graph = self._graph(duck_music=True)
+        self.assertIn("sidechaincompress", graph)
+        # The key is a copy of the voice, so it follows the pauses inside a
+        # sentence rather than only the gaps between subtitles.
+        self.assertIn("asplit=2[voice][duckkey]", graph)
+        self.assertIn("[duckkey]sidechaincompress", graph)
+
+    def test_the_mix_still_sums_rather_than_averages(self):
+        """amix averages by default; CompositeAudioClip summed."""
+        self.assertIn("normalize=0", self._graph(duck_music=True))
+
+    def test_ducking_off_leaves_the_chain_as_it_was(self):
+        graph = self._graph(duck_music=False)
+        self.assertNotIn("sidechaincompress", graph)
+        self.assertNotIn("asplit", graph)
+
+    def test_no_music_means_nothing_to_duck(self):
+        graph = self._graph(bgm_index=None, duck_music=True)
+        self.assertNotIn("sidechaincompress", graph)
+        self.assertNotIn("asplit", graph)
+
+    def test_no_narration_means_nothing_to_duck_against(self):
+        graph = self._graph(voice_index=None, duck_music=True)
+        self.assertNotIn("sidechaincompress", graph)
+
+    def test_both_sources_are_brought_to_one_format(self):
+        """
+        Edge TTS returns 24 kHz mono and music is usually 44.1 kHz stereo.
+        sidechaincompress refuses two inputs that do not agree.
+        """
+        graph = self._graph(duck_music=True)
+        self.assertEqual(graph.count("aformat="), 2)
+
+    def test_the_music_still_fades_out_at_the_end(self):
+        graph = self._graph(duck_music=True)
+        self.assertIn("afade=t=out:st=37.000:d=3", graph)
+
+    def test_the_narration_is_padded_so_it_cannot_shorten_the_video(self):
+        self.assertIn("apad", self._graph(duck_music=True))
+
+
+class TestClipFillModes(unittest.TestCase):
+    """
+    What fills the frame around a clip that is not the video's shape. Stock
+    footage is mostly landscape and most of what this app makes is vertical, so
+    this is what the sides of most finished videos look like.
+    """
+
+    def test_bars_pads_with_black(self):
+        filters = vd._build_clip_fill_filters("bars", 1080, 1920)
+        self.assertIn("force_original_aspect_ratio=decrease", filters)
+        self.assertIn("color=black", filters)
+        self.assertNotIn("gblur", filters)
+
+    def test_crop_fills_the_frame_and_loses_the_edges(self):
+        filters = vd._build_clip_fill_filters("crop", 1080, 1920)
+        self.assertIn("force_original_aspect_ratio=increase", filters)
+        self.assertIn("crop=1080:1920", filters)
+        self.assertNotIn("pad=", filters)
+        self.assertNotIn("gblur", filters)
+
+    def test_blur_lays_the_clip_over_a_blurred_copy_of_itself(self):
+        filters = vd._build_clip_fill_filters("blur", 1080, 1920)
+        self.assertIn("split", filters)
+        self.assertIn("gblur", filters)
+        self.assertIn("overlay=", filters)
+        # The backdrop fills the frame; the clip itself is fitted whole inside
+        # it. Both have to be there, or one of the two halves is missing.
+        self.assertIn("force_original_aspect_ratio=increase", filters)
+        self.assertIn("force_original_aspect_ratio=decrease", filters)
+
+    def test_blur_shrinks_before_blurring(self):
+        """
+        Blur cost grows with area and the backdrop is discarded detail anyway.
+        Blurring at full size is several times slower for the same picture.
+        """
+        filters = vd._build_clip_fill_filters("blur", 1080, 1920)
+        self.assertIn("scale=135:240", filters)
+
+    def test_an_unset_mode_is_blurred(self):
+        self.assertEqual(
+            vd._build_clip_fill_filters(None, 1080, 1920),
+            vd._build_clip_fill_filters("blur", 1080, 1920),
+        )
+
+    def test_an_unknown_mode_is_blurred_rather_than_failing(self):
+        """A stale project file must not be able to fail a render."""
+        self.assertEqual(
+            vd._build_clip_fill_filters("something-else", 1080, 1920),
+            vd._build_clip_fill_filters("blur", 1080, 1920),
+        )
+
+    def test_the_enum_is_accepted_as_well_as_its_value(self):
+        self.assertEqual(
+            vd._build_clip_fill_filters(vd.VideoFillMode.crop, 1080, 1920),
+            vd._build_clip_fill_filters("crop", 1080, 1920),
+        )
+
+    def test_the_mode_reaches_the_ffmpeg_command(self):
+        """The filters are only worth building if they are the ones passed."""
+        captured = {}
+
+        def _capture(command, **_kwargs):
+            captured["vf"] = command[command.index("-vf") + 1]
+            raise OSError("not actually running ffmpeg")
+
+        with patch.object(vd.subprocess, "run", side_effect=_capture):
+            vd._render_clip_with_ffmpeg(
+                source_path="in.mp4",
+                start_time=0,
+                end_time=5,
+                width=1080,
+                height=1920,
+                output_file="out.mp4",
+                codec="h264_mf",
+                threads=2,
+                fill_mode="crop",
+            )
+
+        self.assertIn("crop=1080:1920", captured["vf"])
+        self.assertNotIn("gblur", captured["vf"])
+
+
+class TestCombineVideosPassesFillMode(unittest.TestCase):
+    def test_the_cut_hands_the_mode_to_every_clip(self):
+        """
+        A setting that stops at the top of combine_videos changes nothing, and
+        nothing else in the render would report it.
+        """
+        seen = []
+
+        class _FakeAudioClip:
+            duration = 6.0
+
+            def close(self):
+                pass
+
+        class _FakeVideoClip:
+            def __init__(self):
+                self.duration = 20.0
+                self.size = (1920, 1080)
+                self.w, self.h = 1920, 1080
+
+            def close(self):
+                pass
+
+        def _record(**kwargs):
+            seen.append(kwargs.get("fill_mode"))
+            return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(vd, "AudioFileClip", return_value=_FakeAudioClip()),
+                patch.object(
+                    vd, "_open_video_clip_quietly", return_value=_FakeVideoClip()
+                ),
+                patch.object(vd, "_render_clip_with_ffmpeg", side_effect=_record),
+                patch.object(vd, "concat_video_clips_with_ffmpeg"),
+                patch.object(vd, "delete_files"),
+            ):
+                vd.combine_videos(
+                    combined_video_path=os.path.join(temp_dir, "c.mp4"),
+                    video_paths=["a.mp4"],
+                    audio_file="audio.mp3",
+                    video_concat_mode=vd.VideoConcatMode.sequential,
+                    max_clip_duration=5,
+                    fill_mode="bars",
+                )
+
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {"bars"})
+
+
+class TestTempAudioDirIsolation(unittest.TestCase):
+    """
+    Two renders at once must not share MoviePy's temporary audio file.
+
+    MoviePy names it after the output file, and every task writes a
+    "final-1.mp4", so pointing every render at one shared directory gave them
+    one shared path: they overwrote each other's narration mid-write, and the
+    first to finish deleted the file the other was still reading.
+    """
+
+    @unittest.skipUnless(sys.platform == "win32", "the shared temp dir is Windows-only")
+    def test_two_tasks_do_not_share_a_temp_audio_directory(self):
+        first = vd._get_temp_audio_dir(
+            os.path.join(tempfile.gettempdir(), "tasks", "task-aaaa")
+        )
+        second = vd._get_temp_audio_dir(
+            os.path.join(tempfile.gettempdir(), "tasks", "task-bbbb")
+        )
+
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, tempfile.gettempdir())
+        self.assertTrue(os.path.isdir(first))
+        self.assertTrue(os.path.isdir(second))
+
+    @unittest.skipUnless(sys.platform == "win32", "the shared temp dir is Windows-only")
+    def test_one_task_reuses_its_temp_audio_directory(self):
+        """Stable per task, so a re-render does not leave a new directory."""
+        task_dir = os.path.join(tempfile.gettempdir(), "tasks", "task-cccc")
+
+        self.assertEqual(
+            vd._get_temp_audio_dir(task_dir),
+            vd._get_temp_audio_dir(task_dir),
+        )
+
+    @unittest.skipIf(sys.platform == "win32", "only the non-Windows path is asserted")
+    def test_other_platforms_keep_writing_beside_the_output(self):
+        self.assertEqual(vd._get_temp_audio_dir("/tmp/tasks/task-dddd"), "/tmp/tasks/task-dddd")
 
 
 class TestMaterialResolutionTolerance(unittest.TestCase):

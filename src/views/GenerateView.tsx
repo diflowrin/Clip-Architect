@@ -14,6 +14,7 @@ import {
   type TaskStatus,
   type VideoAspect,
   type VideoParams,
+  type VideoFillMode,
   type VideoTransitionMode,
   type VoiceEngine,
 } from '../lib/api';
@@ -100,6 +101,16 @@ function soundModeOf(params: VideoParams): SoundMode {
   return params.bgm_type ? 'music' : 'silent';
 }
 
+/** Stock footage is mostly landscape and most of what this app makes is
+ *  vertical, so this decides what the sides of the frame look like in the
+ *  majority of finished videos. Blur leads because it is the only one that
+ *  neither throws part of the picture away nor leaves the frame half empty. */
+const FILL_MODES: Array<{ value: VideoFillMode; label: string; hint: string }> = [
+  { value: 'blur', label: 'Blurred', hint: 'A blurred copy of the clip fills the sides.' },
+  { value: 'crop', label: 'Fill frame', hint: 'Zoom in until the frame is full. Cuts the edges off.' },
+  { value: 'bars', label: 'Black bars', hint: 'Leave the unused frame black.' },
+];
+
 const TRANSITIONS: Array<{ value: '' | VideoTransitionMode; label: string }> = [
   { value: '', label: 'None' },
   { value: 'Shuffle', label: 'Shuffle' },
@@ -162,6 +173,8 @@ const DEFAULT_PARAMS: VideoParams = {
   video_aspect: '9:16',
   video_concat_mode: 'random',
   video_transition_mode: null,
+  video_fill_mode: 'blur',
+  bgm_ducking: true,
   // Varied: every scene draws 5, 10 or 15 seconds. A fixed five made every
   // video a metronome and, because each scene is a separate download, made a
   // minute of video cost twelve clips.
@@ -1737,6 +1750,28 @@ export function GenerateView({
                 this value anyway. One decision, made where the clips are visible. */}
 
             <div className="field">
+              <label className="field__label" htmlFor="fill-mode">
+                Frame fill
+              </label>
+              <select
+                id="fill-mode"
+                value={params.video_fill_mode ?? 'blur'}
+                onChange={(event) =>
+                  update('video_fill_mode', event.target.value as VideoFillMode)
+                }
+              >
+                {FILL_MODES.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <p className="field__hint">
+                {FILL_MODES.find((o) => o.value === (params.video_fill_mode ?? 'blur'))?.hint}
+              </p>
+            </div>
+
+            <div className="field">
               <label className="field__label" htmlFor="transition">
                 Transition
               </label>
@@ -2059,6 +2094,24 @@ export function GenerateView({
               value={params.bgm_volume ?? 0.2}
               onChange={(event) => update('bgm_volume', Number(event.target.value))}
             />
+            {/* Sits with the volume slider because it is the same decision:
+                how loud the music is allowed to be, and when. It only has an
+                effect when there is a narration for the music to sit under. */}
+            <label className="checkbox" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={params.bgm_ducking ?? true}
+                onChange={(event) => update('bgm_ducking', event.target.checked)}
+              />
+              <span>
+                Lower the music while the narrator speaks
+                <span className="field__hint">
+                  {' '}
+                  Drops it about 8 dB under the voice and brings it back in the
+                  gaps, so the music can be set loud enough to hear.
+                </span>
+              </span>
+            </label>
           </div>
         </div>
 

@@ -305,6 +305,8 @@ export function presetFromParams(id: string, label: string, params: VideoParams)
       bgm_file: params.bgm_file,
       bgm_volume: params.bgm_volume,
       video_transition_mode: params.video_transition_mode,
+      video_fill_mode: params.video_fill_mode,
+      bgm_ducking: params.bgm_ducking,
       video_clip_duration: params.video_clip_duration,
       paragraph_number: params.paragraph_number,
       video_duration: params.video_duration,

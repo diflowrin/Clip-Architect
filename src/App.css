@@ -1728,3 +1728,73 @@ input[type='range'] {
 .field .button-row {
   margin-top: 4px;
 }
+
+/* ---------- cross-promotion ---------- */
+
+/* Sidebar variant. `margin-top: auto` takes the empty middle of the column, so
+   this and the backend footer both settle at the bottom. The column is a fixed
+   grid track - 232px less 12px of padding each side - so 208px is the width the
+   artwork was cut for, and it never changes with the window. */
+.sidebar-promo {
+  margin-top: auto;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* The image is full-bleed to the card's edge; without this its square
+     corners sit outside the rounded ones. */
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.sidebar-promo__art {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.sidebar-promo__art img {
+  display: block;
+  width: 100%;
+  /* Height follows the crop's own ratio, so the artwork is never squeezed. */
+  height: auto;
+}
+
+.sidebar-promo__art:hover img {
+  /* The only affordance available on a picture that carries its own colour:
+     brightening it says "clickable" without drawing a frame the design does
+     not have. */
+  filter: brightness(1.07);
+}
+
+.sidebar-promo__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+  padding: 7px 9px 8px;
+}
+
+.sidebar-promo__from {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.sidebar-promo__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.sidebar-promo__link:hover {
+  color: var(--text);
+}

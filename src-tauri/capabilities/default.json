@@ -15,6 +15,14 @@
       "comment": "The backend port is reserved at startup and differs every run, so the loopback entry has to admit any port - a fixed http://127.0.0.1/* matched nothing and every Open video failed. Loopback is the only entry: nothing in the UI opens an external link, and a blanket https://* handed a compromised webview a one-call exfiltration path. Adding external links later means listing their domains, not restoring the wildcard.",
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "http://127.0.0.1:*/*" }]
+    },
+    {
+      "comment": "The sidebar link to SEO Content Architect, which is the first external link in the UI - the Pexels and Pixabay addresses in Settings are text, not links. Two exact hosts, per the rule in the entry above: a blanket https://* is what this file exists to avoid. The path glob is ** rather than * because the Store URL is /detail/<id>?cid=... - several segments and a query string, none of which a single * crosses.",
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://apps.microsoft.com/**" },
+        { "url": "https://diflowrin.com/**" }
+      ]
     }
   ]
 }
