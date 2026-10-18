@@ -44,7 +44,7 @@ export default function App() {
       <nav className="sidebar">
         <div className="sidebar__brand">
           <span className="sidebar__brand-name">Clip Architect</span>
-          <span className="sidebar__brand-version">0.2.1</span>
+          <span className="sidebar__brand-version">0.2.2</span>
         </div>
 
         {TABS.map((entry) => (
