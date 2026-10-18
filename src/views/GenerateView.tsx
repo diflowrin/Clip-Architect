@@ -176,6 +176,13 @@ const VOICE_ENGINES: { value: VoiceEngine; label: string; hint: string }[] = [
   },
 ];
 
+// What speaks when no voice is chosen. An empty pick used to stop the form
+// with "Pick a voice first" - while the dropdown, having no matching option,
+// showed the first voice as if it were selected. It is a free Edge voice, so it
+// needs no account whichever engine is on screen.
+const DEFAULT_VOICE = 'en-US-AvaNeural-Female';
+const DEFAULT_VOICE_LABEL = 'Default: Ava (free)';
+
 const DEFAULT_PARAMS: VideoParams = {
   video_subject: '',
   video_script: '',
@@ -540,12 +547,13 @@ export function GenerateView({
         if (!active) return;
         setVoices(result.voices);
         setVoiceMessage(result.message);
-        // Keep the current pick if the new list still offers it, otherwise
-        // fall back to the first voice so the form is never in an invalid state.
+        // Keep the current pick if the new list still offers it. Otherwise
+        // the field goes back to empty, which the dropdown shows as the
+        // default voice and the payload sends as that voice.
         setParams((previous) =>
-          previous.voice_name && result.voices.includes(previous.voice_name)
+          !previous.voice_name || result.voices.includes(previous.voice_name)
             ? previous
-            : { ...previous, voice_name: result.voices[0] ?? '' },
+            : { ...previous, voice_name: '' },
         );
       })
       .catch((cause: unknown) => {
@@ -729,7 +737,9 @@ export function GenerateView({
     // typed length is answered by the numbers themselves, not by whatever the
     // form happened to be showing before it was loaded.
     setCustomLength(false);
-    setVoiceLocale(localeOf(project.params.voice_name));
+    // A project saved on the default voice names none, and would otherwise
+    // reopen on "All languages".
+    setVoiceLocale(project.params.voice_name ? localeOf(project.params.voice_name) : 'en-US');
     setVoiceEngine(engineOf(project.params.voice_name));
     setSelectedMaterials(
       (project.params.video_materials ?? []).map((material) => material.url),
@@ -839,10 +849,6 @@ export function GenerateView({
       setError('Generate or write the script first.');
       return;
     }
-    if (!params.voice_name) {
-      setError(voiceMessage || 'Pick a voice first.');
-      return;
-    }
     setVoiceBusy(true);
     setError(null);
     setVoicePreview(null);
@@ -850,7 +856,7 @@ export function GenerateView({
       const started = await api.createAudio({
         video_script: params.video_script,
         video_language: params.video_language || '',
-        voice_name: params.voice_name,
+        voice_name: params.voice_name || DEFAULT_VOICE,
         voice_rate: params.voice_rate ?? 1,
         voice_volume: params.voice_volume ?? 1,
       });
@@ -1012,6 +1018,7 @@ export function GenerateView({
 
     return {
       ...params,
+      voice_name: params.voice_name || DEFAULT_VOICE,
       // Only meaningful for the local source; sending it otherwise would
       // override the footage the stock provider just matched.
       video_materials: params.video_source === 'local' ? localMaterials : null,
@@ -1032,16 +1039,6 @@ export function GenerateView({
       // Raised from the bottom of the form, shown next to the field it is
       // about, and scrolled to - the same answer the Script buttons give.
       failScript('Enter a video subject first - it is what the video is made from.');
-      return;
-    }
-    // An engine whose credentials are missing offers no voices, so the picker
-    // ends up empty. Stopping here beats a render that reaches the TTS stage
-    // minutes later and fails on a voice that was never chosen.
-    if (narrationOn && !params.voice_name) {
-      setError(
-        voiceMessage ||
-          'Pick a voice, or turn narration off to make a video without one.',
-      );
       return;
     }
     setSubmitBusy(true);
@@ -1926,8 +1923,8 @@ export function GenerateView({
                   id="voice"
                   value={params.voice_name}
                   onChange={(event) => update('voice_name', event.target.value)}
-                  disabled={!voices.length}
                 >
+                  <option value="">{DEFAULT_VOICE_LABEL}</option>
                   {voices.map((voice) => (
                     <option key={voice} value={voice}>
                       {voiceLabel(voice)}

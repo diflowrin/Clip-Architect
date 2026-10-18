@@ -35,13 +35,14 @@ export interface Preset {
  * key can still reach a finished video through it. That is the first-run route
  * the Store reviewer has to find, so it leads.
  *
- * None of them names a voice. They used to pin `voice_name: ''`, which decided
- * nothing - the voice list fills that field the moment it loads - but did
- * break `matchPreset` for good: on a fresh install the chip lit up on the
- * first paint and went dark a moment later, and the hint then told a
- * brand-new user their untouched defaults were "your own settings". A preset
- * that clears the chosen voice would also be wrong on its own terms: switching
- * from landscape to square is not a request to change who is speaking.
+ * None of them names a voice. They used to pin `voice_name: ''`, which broke
+ * `matchPreset` for good while the voice list still filled that field on load:
+ * on a fresh install the chip lit up on the first paint and went dark a moment
+ * later, and the hint then told a brand-new user their untouched defaults were
+ * "your own settings". An empty voice now means the default one, but a preset
+ * that resets the chosen voice would still be wrong on its own terms:
+ * switching from landscape to square is not a request to change who is
+ * speaking.
  */
 export const BUILT_IN_PRESETS: Preset[] = [
   {
