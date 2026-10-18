@@ -856,7 +856,7 @@ def _stream_edge_tts_sync_with_timeout(
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
             raise TimeoutError(
-                f"edge_tts stream timed out after {timeout_seconds:g}s"
+                f"edge_tts stream stalled for {timeout_seconds:g}s"
             )
 
         try:
@@ -868,6 +868,11 @@ def _stream_edge_tts_sync_with_timeout(
 
         if item_type == "chunk":
             on_chunk(payload)
+            # The limit guards against a stalled stream, not a long one. As a
+            # total deadline it failed any script whose audio took longer than
+            # the limit to stream - about 90 seconds of narration at 30s - even
+            # though the service was answering the whole time.
+            deadline = time.monotonic() + timeout_seconds
         elif item_type == "error":
             raise payload
         elif item_type == "done":

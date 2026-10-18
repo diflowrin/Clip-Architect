@@ -426,6 +426,21 @@ class TestVoiceService(unittest.TestCase):
         self.assertIsNone(sub_maker)
         self.assertLess(elapsed, 2)
 
+    def test_edge_tts_timeout_resets_while_chunks_keep_arriving(self):
+        # Five chunks 0.04s apart take 0.2s in total, four times the limit, but
+        # the stream never goes quiet for longer than the limit.
+        class _SlowCommunicate:
+            def stream_sync(self):
+                for _ in range(5):
+                    time.sleep(0.04)
+                    yield {"type": "audio", "data": b"x"}
+
+        received = []
+        vs._stream_edge_tts_sync_with_timeout(
+            _SlowCommunicate(), received.append, timeout_seconds=0.05
+        )
+        self.assertEqual(len(received), 5)
+
     @unittest.skipUnless(
         RUN_INTEGRATION_TESTS,
         "MPT_RUN_INTEGRATION_TESTS not set",
