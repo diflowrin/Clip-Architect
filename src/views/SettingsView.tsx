@@ -8,6 +8,7 @@ import {
   type Settings,
 } from '../lib/api';
 import { Banner } from '../components/Banner';
+import { Toast, Toasts } from '../components/Toast';
 import { LicensesDialog } from '../components/LicensesDialog';
 
 interface Props {
@@ -139,8 +140,10 @@ export function SettingsView({ api, dataDir }: Props) {
         in requests to the provider you choose.
       </p>
 
-      {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
-      {notice && <Banner tone="success" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+      <Toasts>
+        {error && <Toast tone="error" message={error} onDismiss={() => setError(null)} />}
+        {notice && <Toast tone="success" message={notice} onDismiss={() => setNotice(null)} />}
+      </Toasts>
 
       <label className="checkbox">
         <input

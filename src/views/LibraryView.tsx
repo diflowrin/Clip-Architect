@@ -8,7 +8,7 @@ import {
   type SavedProjectSummary,
   type TaskStatus,
 } from '../lib/api';
-import { Banner } from '../components/Banner';
+import { Toast, Toasts } from '../components/Toast';
 import { DownloadedClips } from '../components/DownloadedClips';
 import { TaskCard } from '../components/TaskCard';
 
@@ -206,7 +206,9 @@ export function LibraryView({ api, dataDir, active, onReEdit }: Props) {
         were cut from.
       </p>
 
-      {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
+      <Toasts>
+        {error && <Toast tone="error" message={error} onDismiss={() => setError(null)} />}
+      </Toasts>
 
       <div className="button-row" style={{ marginBottom: 16 }}>
         <button

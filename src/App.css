@@ -855,6 +855,32 @@ input[type='range'] {
   word-break: break-word;
 }
 
+/* Bottom-right because the buttons that fail - record, render - sit low on the
+   page, so the message lands where the eye already is. No entrance animation:
+   nothing in this system moves for effect. */
+.toasts {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, calc(100vw - 40px));
+  pointer-events: none;
+}
+
+.toasts:empty {
+  display: none;
+}
+
+.toasts .banner {
+  margin: 0;
+  border: 1px solid currentColor;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
 .splash {
   display: flex;
   flex-direction: column;

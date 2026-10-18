@@ -44,6 +44,7 @@ import {
   type Preset,
 } from '../lib/presets';
 import { Banner } from '../components/Banner';
+import { Toast, Toasts } from '../components/Toast';
 import { SubtitlePreview } from '../components/SubtitlePreview';
 import { LibraryClipPicker } from '../components/LibraryClipPicker';
 import { MaterialReview } from '../components/MaterialReview';
@@ -1348,8 +1349,10 @@ export function GenerateView({
         )}
       </div>
 
-      {error && <Banner tone="error" onDismiss={() => setError(null)}>{error}</Banner>}
-      {notice && <Banner tone="success" onDismiss={() => setNotice(null)}>{notice}</Banner>}
+      <Toasts>
+        {error && <Toast tone="error" message={error} onDismiss={() => setError(null)} />}
+        {notice && <Toast tone="success" message={notice} onDismiss={() => setNotice(null)} />}
+      </Toasts>
 
       {/* The decisions that make the video, on the page. What sat behind
           "Advanced" was not advanced - a voice, a length, a script are the job
