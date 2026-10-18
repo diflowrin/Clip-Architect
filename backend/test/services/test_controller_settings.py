@@ -360,6 +360,14 @@ class TestSettingsWriteAllowlist(unittest.TestCase):
         self.assertEqual(self.config.app["openrouter_api_key"], "sk-test-value")
         self.save_config.assert_called()
 
+    def test_the_sonilo_key_is_writable(self):
+        # The Settings page edits it; refusing it would make "Save" fail for
+        # anyone who fills in the AI music section.
+        response = self._put({"app": {"sonilo_api_key": "sonilo-test-key"}})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.config.app["sonilo_api_key"], "sonilo-test-key")
+
     def test_every_registered_provider_can_have_its_credentials_written(self):
         """
         表单从注册表渲染输入框，允许列表也从同一处派生。任何一个 Provider
@@ -389,3 +397,32 @@ class TestSettingsWriteAllowlist(unittest.TestCase):
                     settings_controller._WRITABLE_KEYS[section],
                     frozenset(example[section]),
                 )
+
+
+class TestMusicGeneratorsEndpoint(unittest.TestCase):
+    """The form offers an AI music service only once its key is set."""
+
+    def setUp(self):
+        self.client = TestClient(asgi.app)
+
+    def test_reports_each_service_and_whether_it_has_a_key(self):
+        with (
+            patch.object(settings_controller.sonilo, "is_enabled", return_value=True),
+            patch.object(
+                settings_controller.elevenlabs_music, "is_enabled", return_value=False
+            ),
+        ):
+            response = self.client.get("/api/v1/metadata/music-generators")
+
+        self.assertEqual(response.status_code, 200)
+        generators = {
+            entry["id"]: entry["configured"]
+            for entry in response.json()["data"]["generators"]
+        }
+        self.assertEqual(generators, {"sonilo": True, "elevenlabs": False})
+
+    def test_the_ids_are_the_bgm_types_the_task_layer_understands(self):
+        from app.services import task as task_service
+
+        ids = {generator_id for generator_id, _, _ in settings_controller._MUSIC_GENERATORS}
+        self.assertEqual(ids, set(task_service._VIDEO_MUSIC_PROVIDERS))

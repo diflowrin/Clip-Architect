@@ -84,6 +84,11 @@ Apache-2.0 is compatible with GPLv3 (though not GPLv2).
   fell back to a hard-coded `libx264` from every failure path, which silently
   assumed a GPL FFmpeg; with the LGPL build that encoder does not exist and
   every render would fail with no way out.
+- `app/services/sonilo.py`, `app/services/elevenlabs_music.py` — the silent
+  proxy each AI music service uploads is encoded through the same encoder
+  choice as the render (`video.music_proxy_codec_args`) instead of a hard-coded
+  `libx264`, which the LGPL build does not have; every request failed at the
+  proxy before it was sent.
 - `app/services/video.py` — clips are now cut, letterboxed and encoded by a
   single FFmpeg pass (`_render_clip_with_ffmpeg`) instead of frame-by-frame in
   MoviePy. Measured at 1080x1920: MoviePy's resize plus CompositeVideoClip cost

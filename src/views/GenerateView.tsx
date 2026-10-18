@@ -7,6 +7,7 @@ import {
   TASK_STATE_FAILED,
   TASK_STATE_PROCESSING,
   type BgmFile,
+  type MusicGenerator,
   type DownloadedMaterial,
   type FileEntry,
   type MaterialInfo,
@@ -332,6 +333,9 @@ export function GenerateView({
   const [voiceMessage, setVoiceMessage] = useState('');
   const [fonts, setFonts] = useState<string[]>([]);
   const [bgmFiles, setBgmFiles] = useState<BgmFile[]>([]);
+  // AI music services, with whether each has a key. Optional: an empty list
+  // only means the "Composed by AI" group is not offered.
+  const [musicGenerators, setMusicGenerators] = useState<MusicGenerator[]>([]);
   const [materials, setMaterials] = useState<FileEntry[]>([]);
   // Stock footage earlier renders downloaded, offered for reuse next to the
   // upload control: the file is already on disk, so using it again costs no
@@ -493,6 +497,23 @@ export function GenerateView({
   }, [api]);
 
   // --- metadata ---
+
+  // Asked again whenever the music picker gains focus, because a key is set on
+  // the Settings page while this view stays mounted. The route only reads the
+  // config, so asking costs nothing.
+  const refreshMusicGenerators = useCallback(() => {
+    api
+      .listMusicGenerators()
+      .then((result) => setMusicGenerators(result.generators))
+      .catch(() => {
+        // Not worth a message over a form being filled in: the bundled
+        // tracks and uploads are unaffected.
+      });
+  }, [api]);
+
+  useEffect(() => {
+    refreshMusicGenerators();
+  }, [refreshMusicGenerators]);
 
   useEffect(() => {
     let active = true;
@@ -1343,6 +1364,9 @@ export function GenerateView({
   // let a voice-over uploaded for one clip turn up as the soundtrack of an
   // unrelated re-render, with the hint cheerfully counting it as a track.
   const bundledBgm = bgmFiles.filter((entry) => entry.bundled);
+  const selectedGenerator = musicGenerators.find(
+    (generator) => generator.id === params.bgm_type,
+  );
   const uploadedBgm = bgmFiles.filter((entry) => !entry.bundled);
   // The track the picker is on, when it is one of the user's own. Only those
   // can be removed - the bundled library is part of the installed package.
@@ -1987,6 +2011,7 @@ export function GenerateView({
             <select
               id="bgm"
               value={params.bgm_type === 'file' ? `file:${params.bgm_file}` : params.bgm_type}
+              onFocus={refreshMusicGenerators}
               onChange={(event) => {
                 const value = event.target.value;
                 // A primed "Delete file" must not carry over to whatever is
@@ -2022,7 +2047,49 @@ export function GenerateView({
                   ))}
                 </optgroup>
               )}
+              {musicGenerators.length > 0 && (
+                <optgroup label="Composed by AI">
+                  {/* Offered without a key too, so the option can be found;
+                      disabled, because a render would only come back without
+                      music. */}
+                  {musicGenerators.map((generator) => (
+                    <option
+                      key={generator.id}
+                      value={generator.id}
+                      disabled={!generator.configured && params.bgm_type !== generator.id}
+                    >
+                      {generator.configured
+                        ? generator.label
+                        : `${generator.label} - add a key in Settings`}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
+            {selectedGenerator && (
+              <>
+                <span className="field__hint">
+                  {selectedGenerator.label} composes music for the finished cut,
+                  which adds a few minutes to the render and is billed by the
+                  service each time - a re-render included.
+                  {!selectedGenerator.configured &&
+                    ' No key is set for it, so this video would have no music. Add one in Settings.'}
+                </span>
+                <label className="field__label" htmlFor="music-prompt" style={{ marginTop: 8 }}>
+                  What the music should sound like
+                </label>
+                <textarea
+                  id="music-prompt"
+                  value={params.video_music_prompt ?? ''}
+                  maxLength={1000}
+                  placeholder="e.g. calm, hopeful piano with a slow build"
+                  onChange={(event) => update('video_music_prompt', event.target.value)}
+                />
+                <span className="field__hint">
+                  Optional. Left empty, the service decides from the footage.
+                </span>
+              </>
+            )}
             {params.bgm_type === 'file' && params.bgm_file && (
               <audio
                 className="field__audio"

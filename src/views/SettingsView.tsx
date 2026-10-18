@@ -408,6 +408,45 @@ export function SettingsView({ api, dataDir }: Props) {
       </section>
 
       <section className="section">
+        <h2 className="section__title">AI background music</h2>
+        <p className="section__hint">
+          Optional. Instead of a ready-made track, one of these services watches
+          the finished cut and composes music to fit it. Once a key is set, the
+          service appears under Background music when you make a video. Each
+          render is a new composition, billed by the service - a re-render
+          included. How you may use the music is set by your plan with that
+          service.
+        </p>
+
+        <div className="grid">
+          <div className="field">
+            <label className="field__label" htmlFor="sonilo-key">
+              Sonilo API key
+            </label>
+            <input
+              id="sonilo-key"
+              type={secretType}
+              autoComplete="off"
+              value={asText(settings.app.sonilo_api_key)}
+              onChange={(event) => patchApp('sonilo_api_key', event.target.value)}
+            />
+            <span className="field__hint">
+              Videos up to 6 minutes. Get one at platform.sonilo.com/dashboard
+            </span>
+          </div>
+
+          <div className="field">
+            <span className="field__label">ElevenLabs Music</span>
+            <span className="field__hint">
+              Uses the ElevenLabs API key under Premium voices, and needs a paid
+              ElevenLabs plan: the free one does not include the Music API.
+              Videos up to 10 minutes.
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="section">
         <h2 className="section__title">Storage</h2>
         <div className="field">
           <span className="field__label">App data folder</span>

@@ -10,6 +10,7 @@ from loguru import logger
 
 from app.config import config
 from app.services import bgm as bgm_service
+from app.services import video
 from app.utils import utils
 
 
@@ -218,12 +219,7 @@ def _create_video_proxy(video_path: str) -> str:
             "force_divisible_by=2"
         ),
         "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "30",
+        *video.music_proxy_codec_args(),
         "-pix_fmt",
         "yuv420p",
         "-movflags",

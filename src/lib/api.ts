@@ -71,6 +71,9 @@ export interface VideoParams {
   bgm_type?: string;
   bgm_file?: string;
   bgm_volume?: number;
+  /** What an AI-composed soundtrack should sound like. Read only when
+   *  `bgm_type` names a music generator; empty leaves it to the service. */
+  video_music_prompt?: string;
   bgm_ducking?: boolean;
   subtitle_enabled?: boolean;
   subtitle_position?: 'top' | 'bottom' | 'center' | 'custom';
@@ -125,6 +128,15 @@ export interface TaskStatus {
 /** The speech engines the voice picker can offer. Edge is free; the other two
  *  are paid services that need credentials in Settings. */
 export type VoiceEngine = 'edge' | 'azure' | 'elevenlabs';
+
+/** A service that composes a soundtrack for the finished cut. `id` is the
+ *  `bgm_type` that selects it. */
+export interface MusicGenerator {
+  id: string;
+  label: string;
+  /** Whether its key is set - not whether the key works. */
+  configured: boolean;
+}
 
 export interface VoiceList {
   voices: string[];
@@ -699,6 +711,10 @@ export class BackendApi {
     const query = new URLSearchParams({ engine });
     if (locale) query.set('locale', locale);
     return this.request(`/api/v1/metadata/voices?${query.toString()}`);
+  }
+
+  listMusicGenerators(): Promise<{ generators: MusicGenerator[] }> {
+    return this.request('/api/v1/metadata/music-generators');
   }
 
   listLlmProviders(): Promise<{ providers: LlmProvider[] }> {

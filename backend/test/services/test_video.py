@@ -617,6 +617,20 @@ class TestVideoService(unittest.TestCase):
         with patch.object(vd, "_ffmpeg_encoder_exists", return_value=False):
             self.assertEqual(vd._get_effective_video_codec(), "mpeg4")
 
+    def test_music_proxy_uses_the_render_encoder_not_libx264(self):
+        """
+        The AI music services upload a proxy of the cut. Upstream encoded it
+        with libx264, which this LGPL FFmpeg does not have, so the proxy - and
+        with it every Sonilo and ElevenLabs Music request - failed.
+        """
+        config.app["video_codec"] = "h264_mf"
+
+        with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+            args = vd.music_proxy_codec_args()
+
+        self.assertEqual(args[:2], ["-c:v", "h264_mf"])
+        self.assertNotIn("libx264", args)
+
     def test_get_effective_video_codec_prefers_first_available_in_chain(self):
         """
         When the requested encoder is unavailable but others are present, the

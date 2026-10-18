@@ -315,6 +315,22 @@ def _get_effective_video_codec(preferred_codec: str | None = None) -> str:
     return selected_codec
 
 
+# The music services only watch the proxy for pacing and content, so it can be
+# small; at 1280px this keeps a six-minute cut far inside either upload limit.
+_MUSIC_PROXY_BITRATE = "2M"
+
+
+def music_proxy_codec_args() -> list[str]:
+    """
+    Encoder arguments for the silent proxy the AI music services analyse.
+
+    Upstream hard-coded libx264 there, which an LGPL FFmpeg does not have, so
+    every Sonilo and ElevenLabs Music request failed at the proxy before it was
+    sent. The proxy goes through the same encoder choice as the render instead.
+    """
+    return ["-c:v", _get_effective_video_codec(), "-b:v", _MUSIC_PROXY_BITRATE]
+
+
 def _disable_runtime_video_codec(codec: str, reason: str):
     # The terminal fallback is never disabled; doing so would leave the chain
     # with nothing to return.

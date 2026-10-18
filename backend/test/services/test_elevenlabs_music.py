@@ -45,6 +45,18 @@ class _StreamingResponse:
 
 
 class TestElevenLabsMusicService(unittest.TestCase):
+    def setUp(self):
+        # The proxy resolves its encoder by probing FFmpeg, through the same
+        # subprocess.run these tests replace - and the probe result is cached
+        # for the rest of the session. Pinned here so no test reaches it.
+        codec = patch.object(
+            elevenlabs_music.video,
+            "music_proxy_codec_args",
+            return_value=["-c:v", "h264_mf", "-b:v", "2M"],
+        )
+        codec.start()
+        self.addCleanup(codec.stop)
+
     def test_safe_response_error_reads_only_one_bounded_chunk(self):
         class OversizedErrorResponse:
             reason = "Request failed"
@@ -317,6 +329,9 @@ class TestElevenLabsMusicService(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(command[0], "test-ffmpeg")
             self.assertIn("-an", command)
+            # An LGPL FFmpeg has no libx264; naming it failed every request.
+            self.assertNotIn("libx264", command)
+            self.assertEqual(command[command.index("-c:v") + 1], "h264_mf")
             self.assertEqual(
                 command[command.index("-fs") + 1],
                 str(elevenlabs_music.MAX_PROXY_BYTES),

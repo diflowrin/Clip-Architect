@@ -254,8 +254,10 @@ install with no accounts — needs in order to see the app do anything.
   Foundation rather than a bundled encoder. Files are larger than libx264 would
   produce. This is a patent decision, not an oversight; HEVC is never emitted.
 - Several upstream integrations are vendored but not surfaced in the UI —
-  LoomLoom video generation, Sonilo and ElevenLabs music generation, TwelveLabs
-  reranking, social cross-posting. They live in `backend/app/services/`.
+  LoomLoom video generation, TwelveLabs reranking, social cross-posting. They
+  live in `backend/app/services/`. Sonilo and ElevenLabs music generation used
+  to be on this list; a key under Settings → AI background music now adds them
+  to the Background music picker.
 
 ## License
 

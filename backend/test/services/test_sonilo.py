@@ -48,6 +48,18 @@ def _event(event_type, **values):
 
 
 class TestSoniloService(unittest.TestCase):
+    def setUp(self):
+        # The proxy resolves its encoder by probing FFmpeg, through the same
+        # subprocess.run these tests replace - and the probe result is cached
+        # for the rest of the session. Pinned here so no test reaches it.
+        codec = patch.object(
+            sonilo.video,
+            "music_proxy_codec_args",
+            return_value=["-c:v", "h264_mf", "-b:v", "2M"],
+        )
+        codec.start()
+        self.addCleanup(codec.stop)
+
     def test_api_key_prefers_config_and_falls_back_to_environment(self):
         with (
             patch.object(sonilo.config, "app", {"sonilo_api_key": "config-key"}),
@@ -187,6 +199,9 @@ class TestSoniloService(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(command[0], "test-ffmpeg")
             self.assertIn("-an", command)
+            # An LGPL FFmpeg has no libx264; naming it failed every request.
+            self.assertNotIn("libx264", command)
+            self.assertEqual(command[command.index("-c:v") + 1], "h264_mf")
             self.assertIn("force_original_aspect_ratio=decrease", command[command.index("-vf") + 1])
             self.assertEqual(Path(proxy_path).read_bytes(), b"proxy-video")
             Path(proxy_path).unlink()

@@ -20,7 +20,7 @@ from app.controllers import base
 from app.controllers.v1.base import new_router
 from app.models.exception import HttpException
 from app.models.llm_provider import LLM_PROVIDER_REGISTRY, get_llm_provider
-from app.services import llm_catalog
+from app.services import elevenlabs_music, llm_catalog, sonilo
 from app.services import voice as voice_service
 from app.utils import file_security, utils
 
@@ -63,6 +63,9 @@ _FIXED_APP_KEYS = frozenset(
         # The stock footage key lists, edited as one textarea each.
         "pexels_api_keys",
         "pixabay_api_keys",
+        # AI-composed background music. ElevenLabs Music shares the key in
+        # the elevenlabs section; Sonilo's lives in app, as upstream put it.
+        "sonilo_api_key",
     }
 )
 
@@ -449,5 +452,37 @@ def get_llm_models(request: Request, provider: str = ""):
             "provider_id": provider_id,
             "models": catalog["models"],
             "error": catalog["error"],
+        },
+    )
+
+
+# Services that compose a soundtrack for the finished cut. Their ids are the
+# bgm_type values the task layer already understands.
+_MUSIC_GENERATORS = (
+    ("sonilo", "Sonilo", sonilo),
+    ("elevenlabs", "ElevenLabs Music", elevenlabs_music),
+)
+
+
+@router.get(
+    "/metadata/music-generators",
+    summary="List the AI music services and whether each has a key",
+)
+def get_music_generators(request: Request):
+    """
+    Which AI music services the form can offer.
+
+    Only whether a key is set - not whether it works. Checking would spend a
+    request against a paid account every time the form opens, and a key that
+    is refused is reported where it fails, on the render, as a warning beside
+    the video.
+    """
+    return utils.get_response(
+        200,
+        {
+            "generators": [
+                {"id": generator_id, "label": label, "configured": service.is_enabled()}
+                for generator_id, label, service in _MUSIC_GENERATORS
+            ]
         },
     )
