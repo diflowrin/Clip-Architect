@@ -112,15 +112,24 @@ const FILL_MODES: Array<{ value: VideoFillMode; label: string; hint: string }> =
   { value: 'bars', label: 'Black bars', hint: 'Leave the unused frame black.' },
 ];
 
-const TRANSITIONS: Array<{ value: '' | VideoTransitionMode; label: string }> = [
-  { value: '', label: 'None' },
-  { value: 'Shuffle', label: 'Shuffle' },
-  { value: 'FadeIn', label: 'Fade in' },
-  { value: 'FadeOut', label: 'Fade out' },
-  { value: 'SlideIn', label: 'Slide in' },
-  { value: 'SlideOut', label: 'Slide out' },
-  { value: 'ZoomIn', label: 'Zoom in' },
-  { value: 'ZoomOut', label: 'Zoom out' },
+// Each one overlaps the two clips it joins by about a second. The cut collects
+// extra footage to make up for it, so the video still runs as long as the
+// narration. The names describe what happens between two shots, which
+// is what a transition is - "Fade in" used to fade up from black at every cut,
+// because the effect was applied inside a clip and nothing overlapped at all.
+const TRANSITIONS: Array<{ value: '' | VideoTransitionMode; label: string; hint: string }> = [
+  { value: '', label: 'None', hint: 'Cut straight from one clip to the next.' },
+  {
+    value: 'Shuffle',
+    label: 'Shuffle',
+    hint: 'Pick one of the transitions below at random, once per video.',
+  },
+  { value: 'FadeIn', label: 'Crossfade', hint: 'Dissolve one clip into the next.' },
+  { value: 'FadeOut', label: 'Dip to black', hint: 'Fade down to black and back up.' },
+  { value: 'SlideIn', label: 'Slide in', hint: 'The next clip slides in over this one.' },
+  { value: 'SlideOut', label: 'Slide out', hint: 'This clip slides away to uncover the next.' },
+  { value: 'ZoomIn', label: 'Zoom in', hint: 'Push into the clip and hand over at the top.' },
+  { value: 'ZoomOut', label: 'Zoom out', hint: 'Close the clip down to a point over the next.' },
 ];
 
 const VIDEO_SOURCES = [
@@ -1794,6 +1803,12 @@ export function GenerateView({
                   </option>
                 ))}
               </select>
+              <p className="field__hint">
+                {TRANSITIONS.find((o) => o.value === (params.video_transition_mode ?? ''))?.hint}
+                {params.video_transition_mode
+                  ? ' Each cut overlaps the two clips by about a second.'
+                  : ''}
+              </p>
             </div>
 
             <div className="field">

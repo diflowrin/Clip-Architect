@@ -1899,6 +1899,332 @@ class TestCombineVideosPassesFillMode(unittest.TestCase):
         self.assertEqual(set(seen), {"bars"})
 
 
+class TestTransitionsHappenBetweenClips(unittest.TestCase):
+    """
+    A transition is something that happens between two shots. What this used
+    to do was apply an effect inside one clip and then join the clips with the
+    concat demuxer, which never puts two of them on screen at once: FadeIn
+    faded up from black at every cut and SlideIn slid over black rather than
+    over the shot before it.
+    """
+
+    class _FakeAudioClip:
+        # Five 5s clips cover this end to end and only four and a bit of them
+        # once each cut takes a second, which is what makes the two counts
+        # differ at all.
+        duration = 24.0
+
+        def close(self):
+            pass
+
+    class _FakeVideoClip:
+        def __init__(self):
+            self.duration = 30.0
+            self.size = (1920, 1080)
+            self.w, self.h = 1920, 1080
+
+        def close(self):
+            pass
+
+    def _combine(self, transition_mode, **overrides):
+        """Run the cut with everything below the clip stage mocked out."""
+        rendered = []
+
+        def _render(**kwargs):
+            rendered.append(kwargs)
+            return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(vd, "AudioFileClip", return_value=self._FakeAudioClip()),
+                patch.object(
+                    vd, "_open_video_clip_quietly", return_value=self._FakeVideoClip()
+                ),
+                patch.object(vd, "_render_clip_with_ffmpeg", side_effect=_render),
+                patch.object(vd, "concat_video_clips_with_ffmpeg") as concat_mock,
+                patch.object(vd, "delete_files"),
+                patch.object(
+                    vd.video_transitions, "supported_transitions",
+                    return_value=frozenset({"fade", "fadeblack", "coverleft"}),
+                ),
+            ):
+                vd.combine_videos(
+                    combined_video_path=os.path.join(temp_dir, "c.mp4"),
+                    video_paths=["a.mp4", "b.mp4"],
+                    audio_file="audio.mp3",
+                    video_concat_mode=vd.VideoConcatMode.sequential,
+                    video_transition_mode=transition_mode,
+                    max_clip_duration=5,
+                    **overrides,
+                )
+        return rendered, concat_mock
+
+    def test_the_join_is_told_which_transition_to_use(self):
+        _, concat_mock = self._combine(vd.VideoTransitionMode.fade_in)
+        self.assertEqual(concat_mock.call_args.kwargs["transition"], "fade")
+
+    def test_no_transition_leaves_the_join_alone(self):
+        """The concat demuxer path stays the default; it decodes one clip at a
+        time and is the cheaper of the two."""
+        _, concat_mock = self._combine(None)
+        self.assertIsNone(concat_mock.call_args.kwargs["transition"])
+
+    def test_the_join_is_given_the_clip_lengths_and_the_frame(self):
+        """
+        An xfade offset is an absolute position on the finished timeline, and
+        the graph cannot be built without knowing how long each clip runs or
+        what shape the frame is.
+        """
+        _, concat_mock = self._combine(vd.VideoTransitionMode.slide_in)
+        kwargs = concat_mock.call_args.kwargs
+        self.assertEqual(len(kwargs["clip_durations"]), len(kwargs["clip_files"]))
+        self.assertTrue(all(duration > 0 for duration in kwargs["clip_durations"]))
+        self.assertEqual((kwargs["width"], kwargs["height"]), (1080, 1920))
+
+    def test_a_transition_makes_the_cut_collect_more_material(self):
+        """
+        Every transition overlaps the two clips it joins, so the finished video
+        is shorter than the clips that went into it. Measuring the sum instead
+        would stop the cut a transition short of the narration - and 1s at each
+        of a dozen cuts is a dozen seconds of missing picture.
+        """
+        without, _ = self._combine(None)
+        with_transition, _ = self._combine(vd.VideoTransitionMode.fade_in)
+        self.assertEqual(len(without), 5)
+        self.assertEqual(len(with_transition), 6)
+
+    def test_the_clips_themselves_are_untouched_by_the_transition(self):
+        """
+        Same cut, same frame filling, same speed: the only difference a
+        transition makes is at the join. It used to change how the clip itself
+        was rendered, which is why a transition and a plain cut did not even
+        fill the frame the same way.
+        """
+        cut = ("source_path", "start_time", "end_time", "width", "height",
+               "clip_speed", "fill_mode")
+        without, _ = self._combine(None)
+        with_transition, _ = self._combine(vd.VideoTransitionMode.zoom_in)
+        for plain, faded in zip(without, with_transition):
+            self.assertEqual(
+                {key: plain[key] for key in cut},
+                {key: faded[key] for key in cut},
+            )
+
+    def test_an_ffmpeg_without_xfade_falls_back_to_hard_cuts(self):
+        rendered = []
+
+        def _render(**kwargs):
+            rendered.append(kwargs)
+            return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                patch.object(vd, "AudioFileClip", return_value=self._FakeAudioClip()),
+                patch.object(
+                    vd, "_open_video_clip_quietly", return_value=self._FakeVideoClip()
+                ),
+                patch.object(vd, "_render_clip_with_ffmpeg", side_effect=_render),
+                patch.object(vd, "concat_video_clips_with_ffmpeg") as concat_mock,
+                patch.object(vd, "delete_files"),
+                patch.object(
+                    vd.video_transitions, "supported_transitions",
+                    return_value=frozenset(),
+                ),
+            ):
+                vd.combine_videos(
+                    combined_video_path=os.path.join(temp_dir, "c.mp4"),
+                    video_paths=["a.mp4"],
+                    audio_file="audio.mp3",
+                    video_transition_mode=vd.VideoTransitionMode.fade_in,
+                    max_clip_duration=5,
+                )
+
+        self.assertIsNone(concat_mock.call_args.kwargs["transition"])
+        # And the cut is built for hard cuts, not for overlaps that will never
+        # happen: a video that is a second per cut too long is as wrong as one
+        # that is too short.
+        self.assertEqual(len(rendered), 5)
+        self.assertEqual(
+            sum(
+                call["end_time"] - call["start_time"] for call in rendered
+            ),
+            25.0,
+        )
+
+
+class TestJoiningClipsWithTransitions(unittest.TestCase):
+    def _run_concat(self, fake_run, **overrides):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            clip_files = [
+                os.path.join(temp_dir, f"temp-clip-{index}.mp4") for index in (1, 2, 3)
+            ]
+            for clip_file in clip_files:
+                Path(clip_file).write_bytes(b"fake")
+            kwargs = {
+                "clip_files": clip_files,
+                "output_file": os.path.join(temp_dir, "combined.mp4"),
+                "threads": 2,
+                "output_dir": temp_dir,
+                "transition": "fade",
+                "clip_durations": [5.0, 5.0, 5.0],
+                "width": 1080,
+                "height": 1920,
+            }
+            kwargs.update(overrides)
+            with (
+                patch.object(vd.subprocess, "run", side_effect=fake_run),
+                patch.object(vd, "_get_effective_video_codec", return_value="h264_mf"),
+                patch.object(vd, "_get_ffprobe_binary", return_value=None),
+            ):
+                vd.concat_video_clips_with_ffmpeg(**kwargs)
+            return clip_files
+
+    def test_every_clip_becomes_its_own_input(self):
+        """
+        xfade needs both sides of a cut available at the same time, and the
+        concat demuxer hands over one stream. That is the whole reason this
+        path exists.
+        """
+        commands = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        clip_files = self._run_concat(fake_run)
+
+        command = commands[-1]
+        self.assertEqual([command[i + 1] for i, a in enumerate(command) if a == "-i"], clip_files)
+        self.assertNotIn("concat", command)
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(graph.count("xfade=transition=fade"), 2)
+        self.assertIn("-map", command)
+
+    def test_the_output_is_still_trimmed_to_the_narration(self):
+        commands = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self._run_concat(fake_run, max_duration=12.0)
+        command = commands[-1]
+        self.assertEqual(command[command.index("-t") + 1], "12.000")
+
+    def test_the_join_states_a_bitrate_like_every_other_encode(self):
+        commands = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self._run_concat(fake_run)
+        command = commands[-1]
+        self.assertEqual(
+            command[command.index("-b:v") + 1], vd._INTERMEDIATE_CLIP_BITRATE
+        )
+
+    def test_a_failed_transition_falls_back_to_hard_cuts(self):
+        """
+        Every clip has already been encoded by the time the join runs. Hard
+        cuts are a far better outcome than losing all of that work to a filter
+        graph this FFmpeg would not take.
+        """
+        commands = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            if "-filter_complex" in command:
+                return types.SimpleNamespace(
+                    returncode=1, stdout="", stderr="No such filter: 'xfade'"
+                )
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self._run_concat(fake_run)
+
+        self.assertTrue(any("-filter_complex" in c for c in commands))
+        demuxer_commands = [c for c in commands if "concat" in c]
+        self.assertTrue(demuxer_commands, "the plain join must still have run")
+
+    def test_one_clip_is_never_a_transition(self):
+        commands = []
+
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            clip_file = os.path.join(temp_dir, "temp-clip-1.mp4")
+            Path(clip_file).write_bytes(b"fake")
+            with (
+                patch.object(vd.subprocess, "run", side_effect=fake_run),
+                patch.object(vd, "_get_effective_video_codec", return_value="h264_mf"),
+            ):
+                vd.concat_video_clips_with_ffmpeg(
+                    clip_files=[clip_file],
+                    output_file=os.path.join(temp_dir, "combined.mp4"),
+                    threads=2,
+                    output_dir=temp_dir,
+                    transition="fade",
+                    clip_durations=[5.0],
+                    width=1080,
+                    height=1920,
+                )
+
+        self.assertFalse(any("-filter_complex" in c for c in commands))
+
+
+class TestMeasuringClipsForTheTransitionOffsets(unittest.TestCase):
+    """
+    An xfade offset is an absolute position on the finished timeline, so a
+    clip that came out a frame shorter than asked for moves every transition
+    after it, and the error accumulates down the chain.
+    """
+
+    def test_the_written_length_is_preferred_to_the_requested_one(self):
+        def fake_run(command, **kwargs):
+            return types.SimpleNamespace(returncode=0, stdout="4.967\n", stderr="")
+
+        with (
+            patch.object(vd, "_get_ffprobe_binary", return_value="ffprobe"),
+            patch.object(vd.subprocess, "run", side_effect=fake_run),
+        ):
+            durations = vd._measure_clip_durations(["a.mp4", "b.mp4"], [5.0, 5.0])
+
+        self.assertEqual(durations, [4.967, 4.967])
+
+    def test_a_clip_is_measured_once_however_often_it_is_used(self):
+        """The cut repeats clip files whenever it had to loop to cover the
+        narration."""
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return types.SimpleNamespace(returncode=0, stdout="5.0\n", stderr="")
+
+        with (
+            patch.object(vd, "_get_ffprobe_binary", return_value="ffprobe"),
+            patch.object(vd.subprocess, "run", side_effect=fake_run),
+        ):
+            durations = vd._measure_clip_durations(["a.mp4"] * 4, None)
+
+        self.assertEqual(durations, [5.0] * 4)
+        self.assertEqual(len(calls), 1)
+
+    def test_without_ffprobe_the_requested_lengths_are_used(self):
+        with patch.object(vd, "_get_ffprobe_binary", return_value=None):
+            self.assertEqual(
+                vd._measure_clip_durations(["a.mp4", "b.mp4"], [5.0, 3.0]), [5.0, 3.0]
+            )
+
+    def test_nothing_to_measure_and_nothing_to_fall_back_on_gives_nothing(self):
+        """Which is the one case where a transition chain cannot be built at
+        all, and the caller joins with hard cuts instead."""
+        with patch.object(vd, "_get_ffprobe_binary", return_value=None):
+            self.assertIsNone(vd._measure_clip_durations(["a.mp4"], None))
+            self.assertIsNone(vd._measure_clip_durations(["a.mp4"], [0.0]))
+
+
 class TestTempAudioDirIsolation(unittest.TestCase):
     """
     Two renders at once must not share MoviePy's temporary audio file.

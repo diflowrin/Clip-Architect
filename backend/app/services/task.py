@@ -24,6 +24,7 @@ from app.services import (
     llm,
     loomloom,
     material,
+    scene,
     sonilo,
     subtitle,
     task_artifacts,
@@ -1553,6 +1554,53 @@ def _schedule_cross_post(
     return None
 
 
+def _material_shortfall_warnings(
+    params: VideoParams,
+    clip_count: int,
+    audio_duration: float,
+) -> list[dict]:
+    """
+    Say so when the search came back with far fewer clips than the video wants.
+
+    A search that returns one usable clip still renders: the cut takes every
+    scene out of that one file and the finished video shows the same few
+    seconds over and over. Nothing failed, so until now nothing said anything -
+    the first sign was the video itself.
+
+    The usual cause is the provider rather than the search terms. Pixabay's
+    video catalogue is overwhelmingly landscape and its API cannot filter by
+    orientation, so a 9:16 search fetches fifty results and discards nearly all
+    of them. Measured on a real task: five terms, 50 hits each, two portrait
+    clips between them - and both were the same asset, so one survived
+    de-duplication. Pexels takes an orientation parameter and returned 17-20
+    per term for the same kind of query.
+
+    The threshold is one clip per two scenes, so this fires when the footage is
+    being reused rather than whenever the count is not perfect. The wording
+    lives in the UI; this only carries the numbers behind it.
+    """
+    if clip_count <= 0 or params.video_source == "local":
+        # Local files are the user's own choice, not something a search
+        # narrowed down for them.
+        return []
+    wanted = scene.max_material_count(audio_duration, params.video_clip_duration)
+    if clip_count * 2 > wanted:
+        return []
+    logger.warning(
+        f"only {clip_count} clip(s) for a video that wants about {wanted}: "
+        f"source={params.video_source}, aspect={params.video_aspect}"
+    )
+    return [
+        {
+            "code": "few_materials",
+            "clips": clip_count,
+            "wanted": wanted,
+            "source": str(params.video_source or ""),
+            "aspect": str(getattr(params.video_aspect, "value", params.video_aspect)),
+        }
+    ]
+
+
 def _report_stage(task_id, progress, message: str, **extra) -> None:
     """
     Publish progress together with what the task is doing right now.
@@ -1799,6 +1847,13 @@ def _run_pipeline(
             audio_file=audio_file,
             audio_duration=audio_duration,
             subtitle_path=subtitle_path,
+            # Said where the user can still act on it: the clips are on this
+            # screen, the render has not started, and the source and search
+            # terms are one step back.
+            warnings=_material_shortfall_warnings(
+                params, len(downloaded_videos), audio_duration
+            )
+            or None,
         )
         return {"materials": downloaded_videos}
 
@@ -1890,7 +1945,17 @@ def _render_and_complete(
         "cross_post_results": None,
         "cross_post_error": None,
         "cross_post_owner": _cross_post_process_owner if should_cross_post else None,
-        "warnings": generation_warnings or None,
+        # A search that found too little footage belongs on the finished
+        # task as much as anything the render itself raised: the user reads
+        # this record, not the log. Raised here rather than passed in, so a
+        # re-render from the review screen reports it too.
+        "warnings": (
+            _material_shortfall_warnings(
+                params, len(downloaded_videos), audio_duration
+            )
+            + list(generation_warnings or [])
+        )
+        or None,
     }
     sm.state.update_task(
         task_id, state=const.TASK_STATE_COMPLETE, progress=100, **kwargs

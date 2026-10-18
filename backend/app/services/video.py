@@ -4,6 +4,7 @@ import io
 import os
 import random
 import gc
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,7 +41,7 @@ from app.models.schema import (
 from app.services import bgm as bgm_service
 from app.services import scene
 from app.services import subtitle_ass
-from app.services.utils import video_effects
+from app.services import video_transitions
 from app.utils import file_security, utils
 
 class SubClippedVideoClip:
@@ -606,13 +607,161 @@ def _format_ffmpeg_concat_path(file_path: str) -> str:
     return _escape_ffmpeg_concat_path(absolute_path.replace("\\", "/"))
 
 
+def _get_ffprobe_binary() -> str | None:
+    """
+    Locate ffprobe, or None when this machine has only ffmpeg.
+
+    It ships next to ffmpeg in every build the app knows about, including the
+    one it bundles, so it is looked for there first and only then on PATH.
+    """
+    ffmpeg_binary = utils.get_ffmpeg_binary()
+    directory, name = os.path.split(ffmpeg_binary)
+    if "ffmpeg" in name:
+        candidate = os.path.join(directory, name.replace("ffmpeg", "ffprobe"))
+        if os.path.isfile(candidate):
+            return candidate
+    return shutil.which("ffprobe")
+
+
+def _measure_clip_durations(
+    clip_files: List[str],
+    fallback_durations: List[float] | None = None,
+) -> List[float] | None:
+    """
+    The length each clip file actually runs, for the transition offsets.
+
+    An xfade offset is an absolute position on the finished timeline, so a clip
+    that came out a frame shorter than asked for moves every transition after
+    it, and the error accumulates down the chain. The durations the caller
+    carries are what it asked FFmpeg for; these are what FFmpeg wrote.
+
+    Returns None when nothing can be measured and the caller supplied no
+    numbers to fall back on, which is the one case where a transition chain
+    cannot be built at all.
+    """
+    ffprobe_binary = _get_ffprobe_binary()
+    measured: dict[str, float] = {}
+    durations: List[float] = []
+    for index, clip_file in enumerate(clip_files):
+        duration = measured.get(clip_file)
+        if duration is None and ffprobe_binary:
+            try:
+                result = subprocess.run(
+                    [
+                        ffprobe_binary,
+                        "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "csv=p=0",
+                        clip_file,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=20,
+                )
+                duration = (
+                    float((result.stdout or "").strip())
+                    if result.returncode == 0
+                    else None
+                )
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                logger.warning(f"failed to measure {clip_file}: {str(exc)}")
+                duration = None
+            if duration is not None:
+                # The same file appears more than once whenever the cut had to
+                # loop to cover the narration.
+                measured[clip_file] = duration
+        if duration is None or duration <= 0:
+            if fallback_durations is None or index >= len(fallback_durations):
+                return None
+            duration = float(fallback_durations[index])
+            if duration <= 0:
+                return None
+        durations.append(duration)
+    return durations
+
+
+def _run_ffmpeg_concat(build_command: Callable[[str], list[str]]) -> str:
+    """
+    Run the final join, retrying once on the fallback encoder.
+
+    Same reasoning as _write_videofile_with_codec_fallback: an encoder FFmpeg
+    lists is not necessarily one this machine can use, and finding that out at
+    the last stage of a render must not be the end of the render.
+    """
+
+    def run_concat(codec: str) -> str:
+        # 使用 ffmpeg 只做一次串联与编码，避免 MoviePy 逐段合并时反复重编码，
+        # 从而降低画质劣化与颜色偏移风险。
+        result = subprocess.run(
+            build_command(codec),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            error_message = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(error_message or "ffmpeg concat failed")
+        return codec
+
+    effective_codec = _get_effective_video_codec()
+    try:
+        return run_concat(effective_codec)
+    except Exception as exc:
+        if effective_codec == _LAST_RESORT_VIDEO_CODEC:
+            raise
+        result_codec = run_concat(_resolve_fallback_video_codec())
+        _disable_runtime_video_codec(effective_codec, str(exc))
+        return result_codec
+
+
 def concat_video_clips_with_ffmpeg(
     clip_files: List[str],
     output_file: str,
     threads: int,
     output_dir: str,
     max_duration: float | None = None,
+    transition: str | None = None,
+    clip_durations: List[float] | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ):
+    """
+    Join the finished clips into the silent cut.
+
+    Without a transition the clips are laid end to end by the concat demuxer,
+    which never decodes two of them at once. With one they are overlapped by
+    xfade instead - the only way a transition can be between two shots rather
+    than inside one, at the cost of decoding both sides of every cut.
+
+    A transition that fails falls back to the plain join rather than failing
+    the render: every clip has already been encoded by this point, and hard
+    cuts are a far better outcome than losing all of that work.
+    """
+    if transition and len(clip_files) > 1 and width and height:
+        durations = _measure_clip_durations(clip_files, clip_durations)
+        if durations is None:
+            logger.warning(
+                "cannot measure the clips, joining them with hard cuts instead"
+            )
+        else:
+            try:
+                return _concat_video_clips_with_transitions(
+                    clip_files=clip_files,
+                    clip_durations=durations,
+                    output_file=output_file,
+                    threads=threads,
+                    transition=transition,
+                    width=width,
+                    height=height,
+                    max_duration=max_duration,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"ffmpeg could not apply the {transition} transition "
+                    f"({str(exc)[:300]}), joining the clips with hard cuts"
+                )
+
     concat_list_file = os.path.join(output_dir, "ffmpeg-concat-list.txt")
     with open(concat_list_file, "w", encoding="utf-8") as fp:
         for clip_file in clip_files:
@@ -645,35 +794,69 @@ def concat_video_clips_with_ffmpeg(
         command.append(output_file)
         return command
 
-    def run_concat(codec: str):
-        command = build_command(codec)
-        # 使用 ffmpeg 只做一次串联与编码，避免 MoviePy 逐段合并时反复重编码，
-        # 从而降低画质劣化与颜色偏移风险。
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            error_message = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(error_message or "ffmpeg concat failed")
-        return codec
-
     try:
-        effective_codec = _get_effective_video_codec()
-        try:
-            return run_concat(effective_codec)
-        except Exception as exc:
-            # Same reasoning as _write_videofile_with_codec_fallback: retry on
-            # the resolved fallback rather than a codec assumed to exist.
-            if effective_codec == _LAST_RESORT_VIDEO_CODEC:
-                raise
-            result_codec = run_concat(_resolve_fallback_video_codec())
-            _disable_runtime_video_codec(effective_codec, str(exc))
-            return result_codec
+        return _run_ffmpeg_concat(build_command)
     finally:
         delete_files(concat_list_file)
+
+
+def _concat_video_clips_with_transitions(
+    clip_files: List[str],
+    clip_durations: List[float],
+    output_file: str,
+    threads: int,
+    transition: str,
+    width: int,
+    height: int,
+    max_duration: float | None = None,
+):
+    """
+    Join the clips with a real transition at every cut, in one FFmpeg pass.
+
+    Every clip is opened as its own input because xfade needs both sides of a
+    cut at the same time, and the concat demuxer hands over one stream at a
+    time. The joined length is the sum of the clips minus every overlap, which
+    is why the cut was built longer than the narration in the first place.
+    """
+    filter_graph, output_label = video_transitions.build_xfade_filter(
+        durations=clip_durations,
+        transition=transition,
+        width=width,
+        height=height,
+        fps=fps,
+    )
+    joined_duration = video_transitions.timeline_length(clip_durations)
+    logger.info(
+        f"joining {len(clip_files)} clips with the {transition} transition, "
+        f"{joined_duration:.2f}s once the overlaps are taken off"
+    )
+
+    def build_command(codec: str) -> list[str]:
+        command = [utils.get_ffmpeg_binary(), "-y", "-hide_banner"]
+        for clip_file in clip_files:
+            command.extend(["-i", clip_file])
+        command.extend(
+            [
+                "-filter_complex",
+                filter_graph,
+                "-map",
+                f"[{output_label}]",
+                "-c:v",
+                codec,
+                "-b:v",
+                _INTERMEDIATE_CLIP_BITRATE,
+                "-threads",
+                str(threads or 2),
+                "-pix_fmt",
+                "yuv420p",
+            ]
+        )
+        if max_duration is not None and max_duration > 0:
+            command.extend(["-t", f"{max_duration:.3f}"])
+        command.append(output_file)
+        return command
+
+    return _run_ffmpeg_concat(build_command)
 
 
 def _sanitize_image_file(image_path: str) -> str:
@@ -826,6 +1009,26 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
     return ""
 
 
+def _joined_duration(
+    processed_clips: List[SubClippedVideoClip],
+    transition_overlap: float,
+) -> float:
+    """
+    How long these clips will run once they are joined.
+
+    Not the sum of them: a transition overlaps the two clips it joins, so a
+    one-second transition at each of twelve cuts takes twelve seconds off the
+    finished video. Measuring the sum instead is what would make a cut with
+    transitions stop collecting material while it was still a transition short
+    of the narration - and every clip it does collect is one FFmpeg pass, so
+    the cheap way to find out is not to render it and look.
+    """
+    return video_transitions.timeline_length(
+        [clip.duration or 0.0 for clip in processed_clips],
+        transition_overlap,
+    )
+
+
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
@@ -886,8 +1089,23 @@ def combine_videos(
         f"(audio duration + {_VIDEO_DURATION_SAFETY_MARGIN:.2f}s safety margin)"
     )
 
-    # 兼容 API 直接调用时未传转场模式的情况，避免后续访问 .value 时崩溃。
-    transition_value = getattr(video_transition_mode, "value", video_transition_mode)
+    # Resolved once for the whole render rather than per clip. Shuffle used to
+    # draw again at every cut, so three cuts in the viewer had seen a dissolve,
+    # a slide and a zoom and could not tell what the next one would be: that
+    # reads as a mistake, not a style. One draw keeps the surprise and drops
+    # the inconsistency. `None` here means hard cuts, which is also where an
+    # FFmpeg without the transition asked for ends up.
+    transition = video_transitions.resolve_transition(
+        video_transition_mode, utils.get_ffmpeg_binary()
+    )
+    # How much of the timeline each cut will eat. The clips have to add up to
+    # more than the narration by exactly this much, or the video comes out
+    # short.
+    transition_overlap = (
+        video_transitions.TRANSITION_DURATION if transition else 0.0
+    )
+    if transition:
+        logger.info(f"joining clips with the {transition} transition")
     normalized_clip_speed = utils.normalize_clip_speed(clip_speed)
     if normalized_clip_speed != 1.0:
         # 只记录一次最终生效值，既方便定位 API 越界参数被归一化的问题，
@@ -967,73 +1185,59 @@ def combine_videos(
         )
         
         clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
-        prefilled_file = f"{output_dir}/temp-prefill-{i+1}.mp4"
 
         # Cutting, fitting the clip to the frame, re-timing it and encoding it
-        # is one FFmpeg invocation either way. Without a transition that is the
-        # finished clip. With one, it is the input MoviePy composites the
-        # transition over - which is both faster than having MoviePy resize as
-        # well, and the only way a transition and a plain cut fill the frame
-        # the same way. The MoviePy branch below still fits the clip itself,
-        # because it is also the fallback for when FFmpeg cannot.
-        wants_transition = transition_value not in (
-            None,
-            VideoTransitionMode.none.value,
-        )
+        # is one FFmpeg invocation, and it is the whole of the clip stage now:
+        # a transition is no longer something applied inside a clip, so there
+        # is nothing left for MoviePy to composite over the result. The MoviePy
+        # branch below still fits the clip itself, because it is the fallback
+        # for when FFmpeg refuses the job.
         requested_duration = min(
             (subclipped_item.end_time - subclipped_item.start_time)
             / (normalized_clip_speed or 1.0),
             longest_scene,
         )
-        prefilled_source = None
         if _render_clip_with_ffmpeg(
             source_path=subclipped_item.file_path,
             start_time=subclipped_item.start_time,
             end_time=subclipped_item.end_time,
             width=video_width,
             height=video_height,
-            output_file=clip_file if not wants_transition else prefilled_file,
+            output_file=clip_file,
             codec=_get_effective_video_codec(),
             threads=threads,
             clip_speed=normalized_clip_speed,
             fill_mode=fill_mode,
         ):
-            if not wants_transition:
-                processed_clips.append(
-                    SubClippedVideoClip(
-                        file_path=clip_file,
-                        duration=requested_duration,
-                        width=video_width,
-                        height=video_height,
-                        source_file_path=subclipped_item.source_file_path,
-                    )
+            processed_clips.append(
+                SubClippedVideoClip(
+                    file_path=clip_file,
+                    duration=requested_duration,
+                    width=video_width,
+                    height=video_height,
+                    source_file_path=subclipped_item.source_file_path,
                 )
-                video_duration += requested_duration
-                if progress_callback is not None:
-                    try:
-                        progress_callback(
-                            min(video_duration / required_video_duration, 1.0)
-                            if required_video_duration > 0
-                            else 1.0
-                        )
-                    except Exception as exc:
-                        logger.warning(f"progress callback failed: {str(exc)}")
-                continue
-            prefilled_source = prefilled_file
+            )
+            video_duration = _joined_duration(processed_clips, transition_overlap)
+            if progress_callback is not None:
+                try:
+                    progress_callback(
+                        min(video_duration / required_video_duration, 1.0)
+                        if required_video_duration > 0
+                        else 1.0
+                    )
+                except Exception as exc:
+                    logger.warning(f"progress callback failed: {str(exc)}")
+            continue
 
         try:
-            if prefilled_source is not None:
-                # Already cut, already the right shape, already re-timed.
-                clip = _open_video_clip_quietly(prefilled_source)
-            else:
-                clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
-                    subclipped_item.start_time, subclipped_item.end_time
-                )
-                # 播放速度属于素材本身属性，应在转场前应用。这样 Fade/Slide 等一秒转场
-                # 不会跟随素材速度变成 0.5 秒或 2 秒；后续最大时长裁剪继续作为
-                # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
-                if normalized_clip_speed != 1.0:
-                    clip = clip.with_speed_scaled(normalized_clip_speed)
+            clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
+                subclipped_item.start_time, subclipped_item.end_time
+            )
+            # 播放速度属于素材本身属性。后续最大时长裁剪继续作为浮点误差或异常
+            # 素材时长的安全兜底，保证最终片段不突破配置上限。
+            if normalized_clip_speed != 1.0:
+                clip = clip.with_speed_scaled(normalized_clip_speed)
             clip_duration = clip.duration
             # Not all videos are same size, so we need to resize them
             clip_w, clip_h = clip.size
@@ -1057,39 +1261,12 @@ def combine_videos(
                     clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
                     clip = CompositeVideoClip([background, clip_resized])
                     
-            shuffle_side = random.choice(["left", "right", "top", "bottom"])
-            if transition_value in (None, VideoTransitionMode.none.value):
-                clip = clip
-            elif transition_value == VideoTransitionMode.fade_in.value:
-                clip = video_effects.fadein_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.fade_out.value:
-                clip = video_effects.fadeout_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.slide_in.value:
-                clip = video_effects.slidein_transition(clip, 1, shuffle_side)
-            elif transition_value == VideoTransitionMode.slide_out.value:
-                clip = video_effects.slideout_transition(clip, 1, shuffle_side)
-            elif transition_value == VideoTransitionMode.zoom_in.value:
-                clip = video_effects.zoomin_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.zoom_out.value:
-                clip = video_effects.zoomout_transition(clip, 1)
-            elif transition_value == VideoTransitionMode.shuffle.value:
-                transition_funcs = [
-                    lambda c: video_effects.fadein_transition(c, 1),
-                    lambda c: video_effects.fadeout_transition(c, 1),
-                    lambda c: video_effects.slidein_transition(c, 1, shuffle_side),
-                    lambda c: video_effects.slideout_transition(c, 1, shuffle_side),
-                    lambda c: video_effects.zoomin_transition(c, 1),
-                    lambda c: video_effects.zoomout_transition(c, 1),
-                ]
-                shuffle_transition = random.choice(transition_funcs)
-                clip = shuffle_transition(clip)
-
             if clip.duration > longest_scene:
                 clip = clip.subclipped(0, longest_scene)
                 
             # write clip to temp file (clip_file was computed above)
-            # This is the MoviePy path for clips that need a transition, so it
-            # produces an intermediate and takes the intermediate bitrate.
+            # This clip is joined and then re-encoded when the subtitles are
+            # burned in, so it takes the intermediate bitrate.
             _write_videofile_with_codec_fallback(
                 clip,
                 clip_file,
@@ -1102,11 +1279,6 @@ def combine_videos(
             # Store clip duration before closing
             clip_duration_saved = clip.duration
             close_clip(clip)
-            if prefilled_source is not None:
-                # The transition has been written to its own file; the input it
-                # was composited over is dead weight from here on, and there is
-                # one per clip in the cut.
-                delete_files(prefilled_source)
 
             processed_clips.append(
                 SubClippedVideoClip(
@@ -1117,7 +1289,7 @@ def combine_videos(
                     source_file_path=subclipped_item.source_file_path,
                 )
             )
-            video_duration += clip_duration_saved
+            video_duration = _joined_duration(processed_clips, transition_overlap)
 
             if progress_callback is not None:
                 # Report against the duration still needed rather than the clip
@@ -1147,7 +1319,7 @@ def combine_videos(
             if video_duration >= required_video_duration:
                 break
             processed_clips.append(clip)
-            video_duration += clip.duration
+            video_duration = _joined_duration(processed_clips, transition_overlap)
         logger.info(
             f"video duration: {video_duration:.2f}s, audio duration: {audio_duration:.2f}s, "
             f"required duration: {required_video_duration:.2f}s, "
@@ -1168,10 +1340,15 @@ def combine_videos(
         threads=threads,
         output_dir=output_dir,
         max_duration=audio_duration,
+        transition=transition,
+        clip_durations=[clip.duration for clip in processed_clips],
+        width=video_width,
+        height=video_height,
     )
-    
-    # clean temp files
-    delete_files(clip_files)
+
+    # clean temp files. A file can appear more than once once the cut has
+    # looped, and deleting the same path twice is not an error worth guarding.
+    delete_files(list(dict.fromkeys(clip_files)))
             
     logger.info("video combining completed")
     return combined_video_path

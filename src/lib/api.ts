@@ -6,6 +6,10 @@
  * the transport status and the envelope before handing back `data`.
  */
 
+import type { TaskWarning } from './warnings';
+
+export type { TaskWarning };
+
 export type TaskState = -1 | 1 | 4;
 
 export const TASK_STATE_FAILED: TaskState = -1;
@@ -111,6 +115,10 @@ export interface TaskStatus {
   /** Search keywords the pipeline used. Generated when the form left them
    *  blank, so saving a project has to read them back from here. */
   terms?: string[] | null;
+  /** Things that went less than well without stopping the render - too little
+   *  footage found, music that failed to generate. `warningMessages` turns
+   *  them into sentences. */
+  warnings?: TaskWarning[] | null;
   [key: string]: unknown;
 }
 

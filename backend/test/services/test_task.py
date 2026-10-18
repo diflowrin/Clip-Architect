@@ -3113,5 +3113,111 @@ class TestMaterialProgressWiring(unittest.TestCase):
         self.assertIsNone(result)
 
 
+
+class TestFewMaterialsWarning(unittest.TestCase):
+    """
+    A search that comes back with one usable clip still renders: the cut takes
+    every scene out of that one file and the video shows the same few seconds
+    over and over. Nothing fails, so until this warning existed nothing said
+    anything and the first sign was the finished video.
+    """
+
+    def _params(self, **overrides):
+        params = VideoParams(video_subject="elephants")
+        params.video_source = "pixabay"
+        params.video_aspect = VideoAspect.portrait
+        params.video_clip_duration = 0
+        for key, value in overrides.items():
+            setattr(params, key, value)
+        return params
+
+    def test_one_clip_for_a_whole_video_is_reported(self):
+        warnings = tm._material_shortfall_warnings(self._params(), 1, 34.0)
+        self.assertEqual(len(warnings), 1)
+        warning = warnings[0]
+        self.assertEqual(warning["code"], "few_materials")
+        self.assertEqual(warning["clips"], 1)
+        # The numbers are what the sentence in the UI is built from: how many
+        # were found, and how many the video had room for.
+        self.assertGreater(warning["wanted"], 1)
+        self.assertEqual(warning["source"], "pixabay")
+        self.assertEqual(warning["aspect"], "9:16")
+
+    def test_enough_footage_says_nothing(self):
+        """The warning has to stay rare enough to still mean something."""
+        self.assertEqual(tm._material_shortfall_warnings(self._params(), 4, 34.0), [])
+
+    def test_the_threshold_is_one_clip_per_two_scenes(self):
+        # A 34s video plans about four scenes: two clips means each is used
+        # twice over, which is the point at which the repetition shows.
+        self.assertEqual(len(tm._material_shortfall_warnings(self._params(), 2, 34.0)), 1)
+        self.assertEqual(tm._material_shortfall_warnings(self._params(), 3, 34.0), [])
+
+    def test_a_longer_video_needs_more_before_it_is_satisfied(self):
+        self.assertEqual(len(tm._material_shortfall_warnings(self._params(), 3, 120.0)), 1)
+
+    def test_the_users_own_files_are_not_second_guessed(self):
+        """Nothing narrowed those down; they are the selection."""
+        self.assertEqual(
+            tm._material_shortfall_warnings(self._params(video_source="local"), 1, 34.0),
+            [],
+        )
+
+    def test_nothing_downloaded_is_a_failure_elsewhere_not_a_warning_here(self):
+        self.assertEqual(tm._material_shortfall_warnings(self._params(), 0, 34.0), [])
+
+    def test_the_finished_task_carries_it(self):
+        """
+        The task record is what the user reads; a warning that only reaches the
+        log is a warning nobody sees. update_task replaces the record rather
+        than merging into it, so this is easy to lose by accident.
+        """
+        state = MemoryState()
+        with (
+            patch.object(tm.sm, "state", state),
+            patch.object(
+                tm,
+                "generate_final_videos",
+                return_value=(["final-1.mp4"], ["combined-1.mp4"], []),
+            ),
+        ):
+            tm._render_and_complete(
+                "few-materials-task",
+                self._params(),
+                ["only-one.mp4"],
+                "audio.mp3",
+                "subtitle.srt",
+                34.0,
+                "script",
+                ["elephants"],
+            )
+
+        warnings = state.get_task("few-materials-task")["warnings"]
+        self.assertEqual([warning["code"] for warning in warnings], ["few_materials"])
+
+    def test_a_render_with_enough_footage_carries_no_warnings(self):
+        state = MemoryState()
+        with (
+            patch.object(tm.sm, "state", state),
+            patch.object(
+                tm,
+                "generate_final_videos",
+                return_value=(["final-1.mp4"], ["combined-1.mp4"], []),
+            ),
+        ):
+            tm._render_and_complete(
+                "enough-materials-task",
+                self._params(),
+                [f"clip-{index}.mp4" for index in range(5)],
+                "audio.mp3",
+                "subtitle.srt",
+                34.0,
+                "script",
+                ["elephants"],
+            )
+
+        self.assertIsNone(state.get_task("enough-materials-task")["warnings"])
+
+
 if __name__ == "__main__":
     unittest.main()

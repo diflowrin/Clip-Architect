@@ -6,6 +6,7 @@ import type {
   VideoAspect,
   VideoConcatMode,
 } from '../lib/api';
+import { warningMessages } from '../lib/warnings';
 
 interface Props {
   api: BackendApi;
@@ -131,6 +132,8 @@ export function MaterialReview({
   onRender,
   onCancel,
 }: Props) {
+  const warnings = warningMessages(task.warnings);
+
   const preview = PREVIEW_BY_ASPECT[aspect ?? '9:16'] ?? PREVIEW_BY_ASPECT['9:16'];
   const initial = useMemo<Clip[]>(() => {
     const paths = task.material_paths ?? [];
@@ -381,6 +384,15 @@ export function MaterialReview({
           {rendered ? 'Rendered' : 'Not rendered yet'}
         </span>
       </div>
+
+      {/* This is the one screen where a shortfall can still be acted on: the
+          clips are here, the render has not started, and the source and the
+          search terms are one step back. */}
+      {warnings.map((message) => (
+        <div key={message} className="banner banner--warning" style={{ margin: 0 }}>
+          <div className="banner__body">{message}</div>
+        </div>
+      ))}
 
       <label className="checkbox">
         <input

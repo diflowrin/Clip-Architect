@@ -8,6 +8,7 @@ import {
   type TaskStatus,
 } from '../lib/api';
 import { formatDuration } from '../lib/format';
+import { warningMessages } from '../lib/warnings';
 
 interface Props {
   task: TaskStatus;
@@ -49,6 +50,10 @@ export function TaskCard({ task, api, dataDir, reloadToken, onDelete }: Props) {
   const cacheBuster = reloadToken ? `v=${reloadToken}` : '';
 
   const status = statusLabel(task);
+  // A render that finished with less footage than it wanted, or without the
+  // music it was asked for, is still a finished render - so it is said here,
+  // next to the video, rather than being left for the user to notice.
+  const warnings = warningMessages(task.warnings);
   // `videos` holds the finished renders - subtitles burned in, narration and
   // music mixed. `combined_videos` is the silent intermediate the subtitle
   // pass consumes. Preferring the latter, as this once did, showed and opened
@@ -119,6 +124,12 @@ export function TaskCard({ task, api, dataDir, reloadToken, onDelete }: Props) {
           </div>
         </div>
       )}
+
+      {warnings.map((message) => (
+        <div key={message} className="banner banner--warning" style={{ margin: 0 }}>
+          <div className="banner__body">{message}</div>
+        </div>
+      ))}
 
       {actionError && (
         <div className="banner banner--error" style={{ margin: 0 }}>
