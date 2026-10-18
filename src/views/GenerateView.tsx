@@ -138,6 +138,20 @@ const VIDEO_SOURCES = [
   { value: 'local', label: 'Local files' },
 ];
 
+/** The line under the source picker. For a vertical or square video the
+ *  choice of provider decides how much footage there is at all: Pexels
+ *  searches by orientation, while Pixabay cannot, and its catalogue is mostly
+ *  landscape. On one measured task, five Pixabay searches of fifty results
+ *  each left a single portrait clip; Pexels returned 17-20 per search. */
+function sourceHint(source: string | undefined, aspect: VideoAspect | undefined): string {
+  if (source === 'local') return 'Your own files. Needs no account and no key.';
+  const key = 'Needs a free key, set in Settings.';
+  if (aspect === '16:9') return `Stock footage. ${key}`;
+  return source === 'pixabay'
+    ? `Stock footage. ${key} Pixabay has little vertical footage and cannot search by orientation - for this shape, Pexels usually finds far more.`
+    : `Stock footage. ${key} The better choice for vertical and square video: it searches by orientation.`;
+}
+
 const SUBTITLE_POSITIONS = [
   { value: 'bottom', label: 'Bottom' },
   { value: 'center', label: 'Center' },
@@ -1446,9 +1460,7 @@ export function GenerateView({
               ))}
             </select>
             <span className="field__hint">
-              {params.video_source === 'local'
-                ? 'Your own files. Needs no account and no key.'
-                : 'Stock footage. Needs a free key from that provider, set in Settings.'}
+              {sourceHint(params.video_source, params.video_aspect)}
             </span>
           </div>
         </div>
